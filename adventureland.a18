@@ -1,0 +1,2633 @@
+;
+; Copyright (C) 1980 by Scott Adams, All Rights Reserved.
+; Copyright (C) 1993 by Morten Løhre, All Rights Reserved.
+; Copyright (C) 2019 by Richard Goedeken, All Rights Reselved.
+;
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions are met:
+;
+; 1. Redistributions of source code must retain the above copyright notice, this
+;    list of conditions and the following disclaimer.
+; 2. Redistributions in binary form must reproduce the above copyright notice,
+;    this list of conditions and the following disclaimer in the documentation
+;    and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+; ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+; WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+; DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+; ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+; (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+; ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+;
+	incl	"bios.inc"
+	incl	"kernel.inc"
+;
+bs	equ	8
+cr	equ	13
+lf	equ	10
+esc	equ	27
+del	equ	7fh
+;
+#if	not O_CREAT
+O_CREAT	equ	00000001b
+#endif
+#if	not O_TRUNC
+O_TRUNC	equ	00000010b
+#endif
+;
+; ************************************************************
+; This block generates the Execution header for a stand-alone
+; program. It begins 6 bytes before the program start.
+; ************************************************************
+;
+	org	02000h-6	; Header starts at 01ffah
+	dw	2000h
+	dw	endrom-2000h
+	dw	2000h
+;
+	br	GameStart
+; **************************************************
+; Build date format:
+; 80h+month, day, four digit year
+; **************************************************
+; 80h month offset indicates extended
+; build information, with build number and text.
+; **************************************************
+;
+date:	db	80h+6		; Month: June
+	db	24		; Day 24
+	dw	2021		; year = 2021
+;
+build:	dw	2		; build number
+	db	'@Copyleft 2021 Wayne Hortensius',0
+
+;__________________________________________________________________________________________________
+; Print a 2-digit number
+
+; IN:       D = number to print, RF = pointer to start of string
+; OUT:      N/A
+; TRASHED:  D, R7
+
+Print2Digit
+	phi	R7				; save number to print
+	ldi	0
+	plo	R7
+	ghi	R7
+P2D_Tens
+	smi	10
+	bl	P2D_TensDone
+	inc	R7
+	br	P2D_Tens
+P2D_TensDone
+	adi	10				; D is now number of singles
+	phi	R7
+	glo	R7
+	LSNZ				; if there are no tens, 
+	ldi	' '-'0'			; use space as filler char.
+	adi	'0'
+	str	RF				; store the tens digit
+	inc	RF
+	ldi	'0'
+	plo	R7
+	ghi	R7
+P2D_Ones
+	smi	1
+	bl	P2D_OnesDone
+	inc	R7
+	br	P2D_Ones
+P2D_OnesDone
+	glo	R7
+	str	RF
+	dec	RF
+	retn
+
+;__________________________________________________________________________________________________
+; Clear screen
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  RF
+
+ClearScreen
+	load	rf,ClsMsg
+	call	f_msg
+	retn
+
+;__________________________________________________________________________________________________
+; Generate a psuedo-random byte
+
+; IN:       N/A
+; OUT:      D=psuedo-random number
+; TRASHED:  R7
+
+GenRandom
+	load	r7,Rand_VarX
+	sex	R7
+
+	ldn	R7		; D = VarX
+	adi	1
+	str	R7
+	inc	R7
+	lda	R7		; D = VarA
+	inc	R7
+	XOR		; D = VarA XOR VarC
+	dec	R7
+	dec	R7
+	dec	R7
+	XOR		; D = VarA XOR VarC XOR VarX
+	inc	R7
+	str	R7		; VarA = D
+	inc	R7
+	ADD
+	stxd
+	SHR
+	XOR
+	inc	R7
+	inc	R7
+	ADD
+	str	R7
+;;;	sex	r2
+	retn    
+
+;__________________________________________________________________________________________________
+; Restore internal variables to starting state
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, R8, R9
+
+GameReset
+	load	r8,Array_I2		; start by initializing item locations
+	load	r9,Array_IA
+	ldi	IL
+	plo	R7
+GRLoop1
+	lda	R8
+	str	R9
+	inc	R9
+	dec	R7
+	glo	R7
+	bnz	GRLoop1
+	inc	R9
+	inc	R9
+	ldi	0
+	str	R9				; Loadflag = 0
+	inc	R9
+	str	R9				; Endflag = 0
+	inc	R9
+	str	R9				; Darkflag = 0
+	ldi	AR
+	inc	R9
+	str	R9				; Room = AR
+	ldi	LI
+	inc	R9
+	str	R9				; lamp_oil = LT
+	ldi	0
+	inc	R9
+	str	R9
+	inc	R9
+	str	R9				; state_flags = 0
+	retn
+
+;__________________________________________________________________________________________________
+; Main program starting point
+
+Exit
+	lbr	O_WRMBOOT
+
+GameStart
+	load	rf,splash
+	call	f_msg
+	call	f_read				; wait for key press
+	call	ClearScreen
+	; beginning of main() function
+	; Print welcome message
+	load	rf,StartingMsg
+	call	f_msg
+
+	; start of main loop
+MainLoad
+	; reset all game state
+	call	GameReset
+	; load game if possible
+	call	Do_LoadGame
+	; clear screen
+	call	ClearScreen
+	; look()
+	call	Do_Look
+	; NV[0] = 0
+	load	r9,Array_NV
+	ldi	0
+	str	R9
+	; turn()
+	call	Do_Turn
+MainGetInput
+	; get_input()
+	call	Do_GetInput
+	; if command parsing failed, try again
+	bnz	MainGetInput
+	; turn()
+	call	Do_Turn
+	; reload R9 to point to Endflag
+	load	r9,Endflag
+	ldn	R9
+	bnz	Exit			; quit if endflag != 0
+	dec	R9
+	ldn	R9
+	bnz	MainLoad			; loop back and re-load if loadflag != 0
+	; deal with lamp oil
+	load	ra,Array_IA+9
+	ldn	RA
+	smi	0FFH
+	lbnz	MainNoLamp
+	load	r9,LampOil
+	ldn	R9
+	smi	1
+	str	R9				; lamp_oil--
+	lbdf	LampNotEmpty
+	load	rf,LampEmptyMsg		; print Lamp is Empty message
+	call	f_msg
+	ldi	0
+	str	RA				; IA[9] = 0
+	br	MainNoLamp
+LampNotEmpty
+	smi	25				; is our oil level < 25?
+	bdf	MainNoLamp
+	load	rf,LampLow1Msg		; print Lamp is low message
+	call	f_msg
+	load	rf,PrintNumber
+	ldn	R9				; D = lamp_oil
+	call	Print2Digit
+	load	rf,PrintNumber
+	call	f_msg
+	load	rf,LampLow2Msg
+	call	f_msg
+MainNoLamp
+	; NV[0] = 0
+	load	r9,Array_NV
+	ldi	0
+	str	R9
+	; turn()
+	call	Do_Turn
+MainLoopTail
+	; reload R9 to point to Endflag
+	load	r9,Endflag
+	ldn	R9
+	lbnz	Exit			; if endflag != 0, quit
+	dec	R9
+	ldn	R9
+	lbnz	MainLoad		; if loadflag != 0, loop back and re-load
+	lbr	MainGetInput		; otherwise, get next command
+
+;__________________________________________________________________________________________________
+; Adventure get_action_variable() function
+
+; IN:       RD=pAcVar
+; OUT:      D=value
+; TRASHED:  N/A
+
+Sub_GetActionVariable
+	inc	RD			; ###
+	inc	RD
+GAV_Loop1
+	inc	RD
+	ldn	RD
+	bz	GAV_FoundVar
+	inc	RD
+	br	GAV_Loop1
+GAV_FoundVar
+	dec	RD
+	ldn	RD
+	retn
+
+;__________________________________________________________________________________________________
+; Adventure get_input() function
+
+; IN:       N/A
+; OUT:      D = return value (1 if failed, 0 if command OK)
+; TRASHED:  R7, R8, R9, RA, RB, RC, RD, RF
+
+Do_GetInput
+	; print input prompt
+	load	rf,InputPromptMsg
+	call	f_msg
+	; now we are in the gets() function. set up loop variables
+	ldi	0
+	plo	RA				; RA.0 is character counter; only 79 are allowed
+	load	r9,Array_TPS			; R9 is pointer to input line
+GILoop1
+	; wait for key press
+	ghi	re
+	ani	0feh
+	phi	re
+	call	f_read
+	phi	rf
+	ghi	re
+	ori	001h
+	phi	re
+	; handle backspace
+	ghi	RF
+	smi	8
+	bz	GIBackspace
+	ghi	RF
+	smi	07FH
+	bnz	GILoop1N1
+GIBackspace
+	glo	RA				; if line length is 0
+	bz	GILoop1				; then just go back for another input character
+	ldi	bs				; otherwise, erase last character
+	call	f_type
+	ldi	' '				; ' '
+	call	f_type
+	ldi	bs				; '\b'
+	call	f_type
+	dec	RA				; decrement character count
+	dec	R9				; decrement input line pointer
+	br	GILoop1				; and then go back for another input character
+GILoop1N1
+	; handle enter or return
+	ghi	RF
+	smi	lf
+	LBZ	GIEnter
+	ghi	RF
+	smi	cr
+	bnz	GILoop1N2
+GIEnter
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type
+	br	GIgetsDone
+GILoop1N2
+	; ensure that input character is valid
+	ghi	RF
+	smi	' '
+	bz	GICharOk
+	ghi	RF
+	smi	'A'
+	bl	GIJumpLoop1
+	ghi	RF
+	smi	'Z'+1
+	bl	GICharOk
+	ghi	RF
+	smi	'a'
+	bl	GIJumpLoop1
+	ghi	RF
+	smi	'z'+1
+	bl	GICharOk
+GIJumpLoop1
+	LBR	GILoop1
+GICharOk
+	ghi	RF
+	str	R9				; add input character to our string
+	inc	R9
+	inc	RA				; increment string length counter
+	call	f_type				; echo character to serial output
+	glo	RA				; how long is the input line?
+	smi	79
+	bl	GIJumpLoop1		; if < 79 characters, go get another
+GIgetsDone
+	ldi	0			; null-terminate input string
+	str	R9
+	load	r9,Array_TPS
+	; now we are back in the get_input() function.
+	; If the line is empty, go prompt for another command
+	ldn	R9
+	LBZ	Do_GetInput
+	; otherwise, start parsing. begin by skipping any leading spaces
+GIParseLoop1
+	lda	R9
+	bz	GIParseLoop1Done
+	smi	' '
+	bz	GIParseLoop1
+GIParseLoop1Done
+	dec	R9
+	; store pointer to first word in RA
+	glo	R9
+	plo	RA
+	ghi	R9
+	phi	RA
+	; convert entire string to uppercase
+GIParseLoop2
+	lda	R9
+	lbz	GIParseLoop2Done
+	smi	'a'
+	lbnf	GIParseLoop2		; BL
+	adi	'A'
+	dec	R9
+	str	R9
+	inc	R9
+	lbr	GIParseLoop2
+GIParseLoop2Done
+	; reload pointer to start of first word, and find the end (the next space)
+	glo	RA
+	plo	R9
+	ghi	RA
+	phi	R9
+GIParseLoop3
+	lda	R9
+	bz	GIParseLoop3Done
+	smi	' '
+	bnz	GIParseLoop3
+GIParseLoop3Done
+	; if we found a space, NULL-terminate the first word
+	dec	R9
+	ldn	R9
+	lbz	GIParseLoop4
+	ldi	0
+	str	R9
+	inc	R9
+	; skip any additional spaces in between words
+GIParseLoop4
+	lda	R9
+	smi	' '
+	lbz	GIParseLoop4
+	dec	R9
+	; store pointer to second word in RB
+	glo	R9
+	plo	RB
+	ghi	R9
+	phi	RB
+	; find matches for both words
+	load	rc,Array_NV			; RC = pointer to NV[2]
+	load	rd,Array_NVS			; RD = pointer to NVS[2][NL][4], NL=60
+	ldi	0
+	phi	RF				; RF.1 = i, for (i = 0; i < 2; i++)
+	glo	RA				; load pointer to first word in R9
+	plo	R9
+	ghi	RA
+	phi	R9
+GIParseLoop5
+	ldi	0
+	str	RC				; NV[i] = 0
+	ldn	R9
+	bz	GIParseLoop5Tail
+	ldi	0
+	plo	RF				; RF.0 = j, for (j = 0; j < NL; j++)
+GIParseLoop5_1
+	glo	RD
+	plo	R8
+	ghi	RD
+	phi	R8				; R8 = s = NVS[i][j]
+	ldn	R8
+	smi	'*'			; if first character of word is '*'
+	bnz	GIParseLoop5_1Next1
+	inc	R8				; then skip it
+GIParseLoop5_1Next1
+	; comparestring()
+	sex	r8
+	lda	R9				; Load 1st character in input word
+	bz	GIParseLoop5_1WordEnd
+	SM				; compare to 1st character in table word
+	bnz	GIParseLoop5_1NoMatch
+	inc	R8
+	lda	R9				; Load 2nd character in input word
+	bz	GIParseLoop5_1WordEnd
+	SM				; compare to 2nd character in table word
+	bnz	GIParseLoop5_1NoMatch
+	inc	R8
+	lda	R9				; Load 3rd character in input word
+	bz	GIParseLoop5_1WordEnd
+	SM	
+	bnz	GIParseLoop5_1NoMatch
+	SKP				; fall through to GIParseLoop5_1Match
+GIParseLoop5_1WordEnd
+	ldn	R8
+	bnz	GIParseLoop5_1NoMatch
+GIParseLoop5_1Match
+	glo	RF
+	str	RC				; NV[i] = j
+	glo	RD
+	plo	R8
+	ghi	RD
+	phi	R8				; R8 = NVS[i][j]
+GIParseLoop5_1_1			; while (NVS[i][NV[i]][0] == '*') NV[i]--;
+	ldn	R8
+	smi	'*'
+	bnz	GIParseLoop5Tail
+	ldn	RC
+	smi	1
+	str	RC				; NV[i]--
+	dec	R8
+	dec	R8
+	dec	R8
+	dec	R8
+	br	GIParseLoop5_1_1
+GIParseLoop5_1NoMatch
+	sex	R2
+	inc	RD
+	inc	RD
+	inc	RD
+	inc	RD				; move word table pointer to next word
+	ghi	RF				; test i variable
+	bnz	GIParseLoop5_1Next2
+	glo	RA				; reload pointer to first word in R9
+	plo	R9
+	ghi	RA
+	phi	R9
+	br	GIParseLoop5_1Next3
+GIParseLoop5_1Next2
+	glo	RB				; reload pointer to second word in R9
+	plo	R9
+	ghi	RB
+	phi	R9
+GIParseLoop5_1Next3
+	inc	RF
+	glo	RF
+	smi	NL				; NL = 60
+	BNF  GIParseLoop5_1		; go check the next word in the table
+GIParseLoop5Tail
+	inc	RC				; point to next element in NV array
+	glo	RB				; load pointer to second word in R9
+	plo	R9
+	ghi	RB
+	phi	R9
+	load	rd,Array_NVS+(NL*4)       ; RD = pointer to second half of NVS[2][NL][4], NL=60
+	ghi	RF
+	adi	1				; i++
+	phi	RF
+	smi	2
+	BNF  GIParseLoop5		; branch if less
+	; validate first word (verb)
+	dec	RC
+	dec	RC
+	lda	RC
+	lbnz	GIParseVerbOk
+	load	rf,InputError1Msg
+	call	f_msg			; print "I don't know how to "
+	glo	RA
+	plo	RF
+	ghi	RA
+	phi	RF
+	call	f_msg			; print first word
+	load	rf,InputError2Msg
+	call	f_msg			; print '!\r\n'
+	ldi	1
+	retn				; return 1
+GIParseVerbOk
+	; validate second word (noun)
+	ldn	RB				; D is word[0][0]
+	bz	GIParseAllGood
+	ldn	RC				; D is NV[1]
+	bnz	GIParseAllGood
+	load	rf,InputError3Msg
+	call	f_msg				; print "I don't know what a "
+	glo	RB
+	plo	RF
+	ghi	RB
+	phi	RF
+	call	f_msg				; print second word
+	load	rf,InputError4Msg
+	call	f_msg				; print " is!\n"
+	ldi	1
+	retn				; return 1
+GIParseAllGood
+	ldi	0
+	retn				; return 0
+
+;__________________________________________________________________________________________________
+; LoadGame function to restore game state from disk file
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, R8, RC, RD, RF
+
+Do_LoadGame
+	load	rf,LoadQestion
+	call	f_msg				; print "Load saved game (Y or N)?"
+	call	Do_YesNo			; D = 0 if No, 1 if Yes
+	lbnz	LGNext1
+	retn					; return
+LGNext1
+	load	rf,SavePath
+	load	rd,SaveFiledes		; savefile descriptor
+	ldi	0			; (nocreate, no truncate, no append) flags
+	plo	r7
+	call	O_OPEN			; attempt to open file
+	lbnf	LoadOpened		; DF=0, file was opened
+LoadFailed:
+	load	rf,LoadFailedMsg
+	call	f_msg
+	call	f_read			; wait for key press
+	retn
+;
+LoadOpened:
+	load	rc,SaveLength
+	load	rf,SaveStart
+	load	rd,SaveFiledes
+	call	O_READ			; read the save file
+	lbnf	CloseLoadFile		; DF=0, read OK
+	call	LoadFailed		; erad failed
+CloseLoadFile:
+	load	rf,SaveFiledes
+	call	O_CLOSE			; close the image file
+	retn
+
+;__________________________________________________________________________________________________
+; Adventure look() function
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, R8, R9, RA, RB, RC, RF
+
+Do_Look
+	load	r9,Darkflag
+	lda	R9				; D == is_dark
+	bz	LKNotDark
+	sex	R9				; R9 is pointing to 'room'
+	load	ra,Array_IA+9
+	ldn	RA
+	SHL
+	BDF	LKNotDark
+	SHR
+	SM
+	bz	LKNotDark
+	; it's dark. print a message and return
+	load	rf,Look1Msg
+	call	f_msg
+	retn
+LKNotDark
+	ldn	R9
+	SHL				; D = room * 2
+	adi	LOW Table_RSS
+	plo	RA
+	ldi	HIGH Table_RSS
+	ADCI	0
+	phi	RA
+	lda	RA
+	phi	RB
+	lda	RA
+	plo	RB				; RB = RSS[room]
+	lda	RB
+	smi	'*'
+	bz	LKPrintRoom1
+	dec	RB
+	load	rf,Look2Msg			; print "I'm in a " prefix
+	call	f_msg
+LKPrintRoom1
+	glo	RB
+	plo	Rf
+	ghi	RB
+	phi	Rf
+	call	f_msg				; print the room description
+	ldi	0
+	plo	RB				; RB.0 is item counter 'i' for loop
+	phi	RB				; RB.1 is flag which specifies whether item list prefix has been printed
+	load	ra,Array_IA			; RA is pointer to start of IA[]
+LKLoop1
+	sex	R9				; R9 is pointing to 'room'
+	lda	RA
+	SM
+	lbnz	LKLoop1Tail
+	; we have found an item in this room.  start by printing the item list header if necessary
+	ghi	RB
+	bnz	LKLoop1Next1
+	ldi	1
+	phi	RB
+	load	rf,Look3Msg
+	call	f_msg				; print: "Visible Items Here:"
+LKLoop1Next1
+	; print item description
+	glo	RB				; D = item number (i)
+	SHL
+	adi	LOW Table_IAS
+	plo	R8
+	ldi	HIGH Table_IAS
+	adci	0
+	phi	R8
+	lda	R8
+	phi	RC
+	lda	R8
+	plo	RC				; RC = pointer to item description
+	ldi	' '
+	call	f_type
+	ldi	' '
+	call	f_type
+	ldi	' '
+	call	f_type
+LKLoop1_1
+	ldn	RC
+	bz	LKLoop1_1Tail
+	smi	'/'
+	bz	LKLoop1_1Tail
+	lda	RC
+	call	f_type
+	br	LKLoop1_1
+LKLoop1_1Tail
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type
+LKLoop1Tail
+	inc	RB
+	glo	RB
+	smi	IL
+	LBNF	LKLoop1
+	; now print room exits
+	sex	R9
+	ldn	R9				; D = room
+	ADD
+	ADD
+	SHL				; D = room * 6
+	adi	LOW Array_RM
+	plo	R9
+	ldi	HIGH Array_RM
+	adci	0
+	phi	R9				; R9 is pointer to RM[room][0]
+	ldi	0
+	plo	RB				; RB.0 is direction counter 'i' for loop
+	phi	RB				; RB.1 is flag which specifies whether exit list header has been printed
+LKLoop2
+	lda	R9
+	LBZ	LKLoop2Tail
+	; we have found an exit from this room.  start by printing the exit list header if necessary
+	ghi	RB
+	lbnz	LKLoop2Next1
+	ldi	1
+	phi	RB
+	load	rf,Look4Msg
+	call	f_msg
+LKLoop2Next1
+	glo	RB
+	SHL
+	SHL
+	SHL
+	adi	LOW Array_DIR
+	plo	RF
+	ldi	HIGH Array_DIR
+	adci	0
+	phi	RF
+	call	f_msg				; print direction
+	ldi	' '
+	call	f_type
+LKLoop2Tail
+	inc	RB
+	glo	RB
+	smi	6
+	lbnf	LKLoop2			; BL
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type
+	ldi	lf
+	call	f_type
+	retn
+
+;__________________________________________________________________________________________________
+; Adventure turn() function
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, R8, R9, RA, RB, RF
+
+Do_Turn
+	ldi	0
+	plo	R9				; R9.0 = i ((is_dark) && (IA[9] != room) && (IA[9] != -1))
+	phi	R9				; R9.1 = go_direction
+	load	r7,Array_NV
+	lda	R7				; D = NV[0]
+	smi	1
+	bnz	TUNoGo
+	ldn	R7
+	bnz	TUHaveNoun
+	load	rf,Turn1Msg
+	call	f_msg				; print "Where do you want me to go? Give me a direction too.\n"
+	retn					; return
+TUHaveNoun
+	smi	007H
+	LBDF TUNoDirection		; BGE
+	ldn	R7
+	phi	R9				; go_direction = NV[1]
+	br	TUHaveDirection
+TUNoGo
+	dec	R7
+	ldn	R7				; D = NV[0]
+	smi	54
+	LBNF TUNoDirection		; BL
+	smi	6
+	LBDF TUNoDirection		; BGE
+	adi	7
+	phi	R9				; go_direction = NV[0] - 53
+TUHaveDirection
+	load	ra,Darkflag
+	lda	RA				; D == is_dark
+	sex	RA				; RA is pointing to 'room'
+	bz	TUNotDark
+	load	rb,Array_IA+9			; RB is pointer to IA[9]
+	ldn	RB
+	SHL
+	BDF  TUNotDark
+	SHR
+	SM
+	bz	TUNotDark
+	; it's dark. print a message
+	inc	R9				; i = 1
+	load	rf,Turn2Msg
+	call	f_msg				; print: "Warning: it's dangerous to move in the dark!\n"
+	sex	RA
+TUNotDark
+	ghi	R9
+	str	R2				; put go_direction on top of stack
+	LDX				; D = room
+	ADD
+	ADD
+	SHL				; D = room * 6
+	sex	R2
+	ADD				; D = room * 6 + go_direction
+	adi	LOW (Array_RM-1)
+	plo	RB
+	ldi	HIGH (Array_RM-1)
+	adci	0
+	phi	RB				; RB is pointer to RM[room][go_direction-1]
+	ldn	RB
+	phi	R9				; R9.1 = j
+	lbnz	TUExitNotBlocked
+	glo	R9
+	bnz	TUBlockedAndDark
+	load	rf,Turn3Msg
+	call	f_msg				; print: "I can't go in that direction.\n"
+	retn				; return
+TUBlockedAndDark
+	load	rf,Turn4Msg
+	call	f_msg				; print: "I fell down and broke my neck.\n"
+	ldi	RL-1
+	phi	R9				; j = RL-1
+	dec	RA
+	ldi	0
+	str	RA				; is_dark = false
+	inc	RA
+	br	TUSetRoom
+TUExitNotBlocked
+	call	ClearScreen
+TUSetRoom
+	ghi	R9
+	str	RA				; room = j
+	call	Do_Look			; look()
+	retn				; return
+TUNoDirection
+	ldi	0
+	phi	R9				; R9.1 = command_found = false
+	plo	R9
+	inc	R9				; R9.0 = command_allowed = true
+	load	ra,Array_C			; RA = C[cmd]
+TULoop1
+	load	r7,Array_NV
+	ldn	RA
+	plo	R8				; R8.0 = i = C[cmd][0]
+	bz	TULoop1Next1
+	ldn	R7
+	lbz	TULoop1Done		; if (NV[0] == 0 && i != 0) break;
+	glo	R8
+TULoop1Next1
+	sex	R7
+	SM
+	lbnz	TULoop1Tail
+	inc	RA
+	ldn	RA
+	dec	RA
+	plo	R8				; R8.0 = i = C[cmd][1]
+	lbz	TULoop1CheckCommand
+	inc	R7
+	SM				; D = i - NV[1]
+	dec	R7
+	lbz	TULoop1CheckCommand
+	ldn	R7				; D = NV[0]
+	lbnz	TULoop1Tail
+TULoop1GetChances			; get random number between 1 and 100
+	call	GenRandom			; R7 is trashed
+	SHR
+	smi	100
+	lbdf	TULoop1GetChances		;;E BGE
+	adi	101
+	str	R2
+	glo	R8				; D = i
+	SM
+	lbnf	TULoop1Tail			; BL
+TULoop1CheckCommand
+	ldi	1
+	phi	R9				; R9.1 = command_found = true
+	call	Do_CheckLogics
+	plo	R9				; R9.0 = command_allowed = check_logics(cmd)
+	lbz	TULoop1Tail
+	glo	RA				; pre-increment C[cmd] pointer to use as an end-of-loop marker
+	plo	RD				; and store original value in RD###
+	adi	010H
+	plo	RA
+	plo	RB
+	ghi	RA
+	phi	RD				; RD is pAcVar###
+	adci	0
+	phi	RA
+	phi	RB
+	dec	RB
+	dec	RB
+	dec	RB
+	dec	RB				; RB is C[cmd][y]
+TULoop1_1
+	ldn	RB				; D = ac
+	bz	TULoop1_1SkipAction
+	call	Do_Action
+	bnz	TULoop1_1Done		; if (failed) break;
+TULoop1_1SkipAction
+	load	r7,Loadflag
+	lda	R7
+	bnz	TULoop1Done		; if (loadflag) break twice
+	ldn	R7
+	bnz	TULoop1Done		; if (endflag) break twice
+TULoo1_1Tail
+	inc	RB				; y++
+	glo	RB
+	str	R2
+	glo	RA
+	SM
+	lbnz	TULoop1_1			; loop if C[cmd][y] != C[cmd+1][0]
+TULoop1_1Done
+	load	r7,Array_NV			; R7 = NV
+	ldn	R7
+	bnz	TULoop1Done		; if (NV[0] != 0) break;
+	br	TULoop1Tail2		; skip C[cmd] pointer advancement because we already did it
+TULoop1Tail
+	glo	RA
+	adi	010H
+	plo	RA
+	ghi	RA
+	adci	000H
+	phi	RA				; RA = C[cmd+1]
+TULoop1Tail2
+	ldn	RA
+	smi	0FFH
+	lbnz	TULoop1
+TULoop1Done
+	load	r7,Array_NV
+	ldn	R7				; D = NV[0]
+	smi	10
+	bz	TUCarryDrop
+	ldn	R7
+	smi	18
+	bnz	TUNotCarryDrop
+TUCarryDrop
+	glo	R9				; D = command_allowed
+	bz	TURunCarryDrop
+	ghi	R9				; D = command_found
+	bnz	TUNotCarryDrop
+TURunCarryDrop			; if (!command_found || !command_allowed)
+	call	Do_CarryDrop		; carry_drop()
+	retn				; return
+TUNotCarryDrop
+	ldn	R7				; D = NV[0]
+	bz	TUDone
+	ghi	R9				; D = command_found
+	bnz	TUCommandWasFound
+	load	rf,Turn5Msg
+	br	TUPrintAndReturn		; print: "I don't understand your command."
+TUCommandWasFound
+	glo	R9				; D = command_allowed
+	bnz	TUDone
+	load	rf,Turn6Msg
+TUPrintAndReturn
+	call	f_msg				; print: "I can't do that yet."
+TUDone
+	retn
+
+;__________________________________________________________________________________________________
+; Adventure carry_drop() function
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, R8, R9, RA, RB, RF
+
+Do_CarryDrop
+	load	r7,Array_NV			; R7 = NV
+	lda	R7
+	plo	RA				; RA.0 = NV[0]
+	ldn	R7
+	phi	RA				; RA.1 = NV[1]
+	bnz	CDHaveNoun
+	load	rf,CarryDrop1Msg
+	LBR  CDPrintAndReturn		; print: "What?"
+CDHaveNoun
+	glo	RA
+	smi	10
+	lbnz	CDNotTake
+	; check to make sure we don't have too many items
+	load	r7,Array_IA			; R7 points to IA array
+	ldi	0
+	plo	RF				; RF.0 = number of items in inventory
+	ldi	IL
+CDLoop1
+	phi	RF				; RF.1 = item counter
+	lda	R7
+	smi	0FFH
+	lbnz	CDLoop1Tail
+	inc	RF
+CDLoop1Tail
+	ghi	RF
+	smi	1
+	lbnz	CDLoop1
+	ldi	MX
+	str	R2
+	glo	RF
+	SM					; DF/D = items - MX
+	bl	CDNotTake
+	load	rf,CarryDrop2Msg
+	call	f_msg				; print: "I can't. I'm carrying too much!"
+	retn					; return
+CDNotTake
+	ldi	IL
+	plo	RF				; RF.0 = item counter
+	ldi	0
+	phi	RF				; RF.1 = found_object
+	ghi	RA				; D = NV[1]
+	SHL
+	SHL
+	adi	LOW (Array_NVS+240)
+	plo	R9
+	ldi	HIGH (Array_NVS+240)
+	adci	0
+	phi	R9				; R9 points to NVS[1][NV[1]], which is a 3-letter uppercase noun given by the user
+	load	r7,Table_IAS			; R7 points to IAS table
+	sex	r8
+CDLoop2
+	lda	R7
+	phi	R8
+	lda	R7
+	plo	R8				; R8 = pointer to IAS[j][0]
+CDLoop2_1
+	lda	R8				; find end of item description string
+	bnz	CDLoop2_1
+	dec	R8
+	dec	R8
+	ldn	R8
+	smi	'/'			; if last character is not a slash
+	lbnz	CDLoop2Tail		; then skip this item
+CDLoop2_2
+	dec	R8				; else find the preceding slash
+	ldn	R8
+	smi	'/'
+	lbnz	CDLoop2_2
+	inc	R8				; R8 is first character in short uppercase object name
+	; comparestring()
+	lda	R9				; Load 1st character in input noun
+	SM				; compare to 1st character in object name
+	lbnz	CDLoop2_2NoMatch1
+	inc	R8
+	lda	R9				; Load 2nd character in input noun
+	SM				; compare to 2nd character in object name
+	lbnz	CDLoop2_2NoMatch2
+	inc	R8
+	ldn	R9				; Load 3rd character in input noun
+	lbz	CDLoop2_FoundObject
+	SM				; compare to 3rd character in object name
+	lbz	CDLoop2_FoundObject
+CDLoop2_2NoMatch2
+	dec	R9
+CDLoop2_2NoMatch1
+	dec	R9				; restore R9 to point to start of input noun
+CDLoop2Tail
+	dec	RF
+	glo	RF
+	lbnz	CDLoop2
+CDLoop2Done
+	ghi	RF				; D = found_object
+	lbnz	CDLoop2Done2
+	load	rf,CarryDrop7Msg
+	lbr	CDPrintAndReturn		; print: "It's beyond my power to do that."
+CDLoop2Done2
+	glo	RA				; D = NV[0]
+	smi	10
+	lbnz	CDLoop2Done3
+	load	rf,CarryDrop4Msg
+	br	CDPrintAndReturn		; print: "I don't see it here."
+CDLoop2Done3
+	load	rf,CarryDrop6Msg
+	br	CDPrintAndReturn		; print: "I'm not carrying it!"
+
+CDLoop2_FoundObject
+	; we found a matching object!
+	ldi	1
+	phi	RF				; RF.1 = found_object
+	sex	R2
+	glo	RF
+	str	R2
+	ldi	IL
+	SM				; D = j (item index)
+	adi	LOW Array_IA
+	plo	RB
+	ldi	HIGH Array_IA
+	adci	000H
+	phi	RB				; RB = pointer to IA[j]
+	load	r8,Room				; R8 = pointer to 'room'
+	sex	R8
+	glo	RA				; D = NV[0]
+	smi	10
+	bnz	CDDropItem
+CDTakeItem
+	ldn	RB
+	SM
+	lbnz	CDLoop2_2NoMatch2		; go back and look for another item with the same name; maybe it's here instead of this one
+	ldi	0FFH
+	str	RB				; IA[j] = -1;
+	load	rf,CarryDrop3Msg
+	br	CDPrintAndReturn		; print: "OK, taken."
+
+CDDropItem
+	ldn	RB
+	smi	0FFH
+	lbnz	CDLoop2_2NoMatch2		; not in my inventory; go back and look for another item with the same name
+	ldn	R8
+	str	RB				; IA[j] = room;
+	load	rf,CarryDrop5Msg		; print: "OK, dropped."
+
+CDPrintAndReturn
+	call	f_msg
+	retn
+
+;__________________________________________________________________________________________________
+; Adventure check_logics() function
+
+; IN:       RA=C[cmd]
+; OUT:      D=1 if command is allowed, 0 otherwise
+; TRASHED:  R7, R8, RB, RC
+
+Do_CheckLogics
+	glo	RA
+	stxd
+	ghi	RA
+	stxd				; push RA on the stack
+	ldi	005H
+	plo	R7				; R7.0 = loop counter
+	inc	RA
+	inc	RA				; RA points to C[cmd][2]
+	load	rc,Room				; RC = pointer to Room
+CLLoop1
+	inc	RC
+	inc	RC				; RC = pointer to StateFlags
+	lda	RC
+	phi	RB
+	ldn	RC
+	plo	RB				; RB = value of StateFlags
+	dec	RC
+	dec	RC
+	dec	RC				; RC = pointer to Room
+	lda	RA
+	phi	R7				; R7.1 = ll
+	plo	R8
+CLLoop1_1
+	bz	CLLoop1_1Done
+	ghi	RB
+	SHR
+	phi	RB
+	glo	RB
+	SHRC
+	plo	RB
+	dec	R8
+	glo	R8
+	br	CLLoop1_1
+CLLoop1_1Done
+	glo	RB
+	ANI  001H
+	phi	R8				; R8.1 = ((state_flags >> ll) && 1)
+	ghi	R7				; D = ll
+	adi	LOW Array_IA
+	plo	RB
+	ldi	HIGH Array_IA
+	adci	000H
+	phi	RB				; RB = pointer to IA[ll]
+	lda	RA				; D = k
+	LBZ  CLLoop1Tail		; skip this predicate if k == 0
+CLLoopCheck1
+	sex	RC				; M(R(X)) points to Room
+	smi	1
+	lbnz	CLLoopCheck2
+	ldn	RB
+	smi	0FFH
+	Lbz	CLLoop1Tail		; if (k == 1) allowed = (IA[ll] == -1);
+	Lbr	CLReturnFalse
+CLLoopCheck2
+	smi	1
+	Lbnz	CLLoopCheck3
+	ldn	RB
+	SM
+	lbz	CLLoop1Tail		; if (k == 2) allowed = (IA[ll] == room);
+	lbr	CLReturnFalse
+CLLoopCheck3
+	smi	1
+	bnz	CLLoopCheck4
+	ldn	RB
+	SM
+	lbz	CLLoop1Tail
+	ldn	RB
+	smi	0FFH
+	lbz	CLLoop1Tail		; if (k == 3) allowed = (IA[ll] == room || IA[ll] == -1);
+	lbr	CLReturnFalse
+CLLoopCheck4
+	smi	1
+	lbnz	CLLoopCheck5
+	ghi	R7
+	SM
+	lbz	CLLoop1Tail		; if (k == 4) allowed = (room == ll);
+	lbr	CLReturnFalse
+CLLoopCheck5
+	smi	1
+	lbnz	CLLoopCheck6
+	ldn	RB
+	SM
+	lbnz	CLLoop1Tail		; if (k == 5) allowed = (IA[ll] != room);
+	lbr	CLReturnFalse
+CLLoopCheck6
+	smi	1
+	lbnz	CLLoopCheck7
+	ldn	RB
+	smi	0FFH
+	lbnz	CLLoop1Tail		; if (k == 6) allowed = (IA[ll] != -1);
+	lbr	CLReturnFalse
+CLLoopCheck7
+	smi	1
+	lbnz	CLLoopCheck8
+	ghi	R7
+	SM
+	lbnz	CLLoop1Tail		; if (k == 7) allowed = (room != ll);
+	lbr	CLReturnFalse
+CLLoopCheck8
+	smi	1
+	lbnz	CLLoopCheck9
+	ghi	R8				; D = ((state_flags >> ll) && 1)
+	lbnz	CLLoop1Tail		; if (k == 8) allowed = (state_flags & (1 << ll)) != 0;
+	lbr	CLReturnFalse
+CLLoopCheck9
+	smi	1
+	lbnz	CLLoopCheck10
+	ghi	R8				; D = ((state_flags >> ll) && 1)
+	lbz	CLLoop1Tail		; if (k == 9) allowed = (state_flags & (1 << ll)) == 0;
+	lbr	CLReturnFalse
+CLLoopCheck10
+	smi	1
+	lbnz	CLLoopCheck11
+	load	rb,Array_IA			; RB = pointer to IA[0]
+	ldi	IL
+	plo	R8				; R8 = loop counter IL
+CLCheck10Loop1
+	lda	RB
+	smi	0FFH
+	lbz	CLLoop1Tail		; if (k == 10) for (i=0; i<IL; i++) if (IA[i] == -1) allowed = true;
+	dec	R8
+	glo	R8
+	lbnz	CLCheck10Loop1
+	lbr	CLReturnFalse
+CLLoopCheck11
+	smi	1
+	bnz	CLLoopCheck12
+	load	rb,Array_IA			; RB = pointer to IA[0]
+	ldi	IL
+	plo	R8				; R8 = loop counter IL
+CLCheck11Loop1
+	lda	RB
+	smi	0FFH
+	bz	CLReturnFalse		; if (k == 11) for (i=0; i<IL; i++) if (IA[i] == -1) allowed = false;
+	dec	R8
+	glo	R8
+	bnz	CLCheck11Loop1
+	br	CLLoop1Tail
+CLLoopCheck12
+	smi	1
+	bnz	CLLoopCheck13
+	ldn	RB
+	SM
+	bz	CLReturnFalse
+	ldn	RB
+	smi	0FFH
+	bz	CLReturnFalse		; if (k == 12) allowed = (IA[ll] != -1 && IA[ll] != room);
+	br	CLLoop1Tail
+CLLoopCheck13
+	smi	1
+	bnz	CLLoopCheck14
+	ldn	RB
+	bnz	CLLoop1Tail		; if (k == 13) allowed = (IA[ll] != 0);
+	br	CLReturnFalse
+CLLoopCheck14
+	smi	1
+CLDebug1
+	bnz	CLDebug1			; deadlock here if invalid 'k' was found
+	ldn	RB
+	bnz	CLReturnFalse		; if (k == 14) allowed = (IA[ll] == 0);
+CLLoop1Tail
+	dec	R7
+	glo	R7
+	lbnz	CLLoop1
+CLReturnTrue
+	sex	R2
+	inc	R2
+	LDXA
+	phi	RA
+	LDX
+	plo	RA				; restore original value of RA
+	ldi	1
+	retn				; return false
+CLReturnFalse
+	sex	R2
+	inc	R2
+	LDXA
+	phi	RA
+	LDX
+	plo	RA				; restore original value of RA
+	ldi	0
+	retn				; return false
+
+;__________________________________________________________________________________________________
+; Adventure action() function
+
+; IN:       D=ac, RD=pAcVar, R2 = stack pointer
+; OUT:      D=1 if action failed, 0 otherwise
+; TRASHED:  R1, R7, R8, RC, RD, RF
+
+Do_Action
+	str	R2				; save 'ac' variable
+	ldn	R2				; D = ac
+	smi	52
+	bl	DAPrintMessage
+	smi	50
+	BGE	DAPrintMessage
+	adi	50
+	lbr	DACheck52
+DAPrintMessage
+	adi	52				; D = message number
+	SHL
+	adi	LOW Table_MSS
+	plo	R7
+	ldi	HIGH Table_MSS
+	adci	0
+	phi	R7
+	lda	R7
+	phi	Rf
+	ldn	R7
+	plo	Rf				; RF points to message to print
+	call	f_msg
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type				; print '\r\n'
+	ldi	0
+	retn					; return false (action didn't fail)
+DACheck52
+	lbnz	DACheck53
+	load	r7,Array_IA			; R7 = pointer to IA[0]
+	ldi	IL
+	plo	R8				; R8.0 = IL
+	ldi	0
+	plo	RC
+DACheck52Loop
+	lda	R7				; D = IA[i]
+	smi	0FFH
+	bnz	DACheck52Next
+	inc	RC				; j++
+DACheck52Next
+	dec	R8
+	glo	R8
+	bnz	DACheck52Loop
+	glo	RC
+	smi	MX
+	lbnf	DACheck52TakeItem		; BL
+	load	rf,CarryDrop2Msg
+	call	f_msg				; print: "I can't. I'm carrying too much!"
+	ldi	1
+	retn					; return true
+DACheck52TakeItem
+	call	Sub_GetActionVariable		; call get_action_variable()
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	adci	0
+	phi	R7				; R7 = pointer to IA[get_action_variable(pAcVar)]
+	ldi	0FFH
+	str	R7
+DAReturnFalse1
+	ldi	0
+	retn					; return false (action didn't fail)
+DACheck53
+	smi	1
+	lbnz	DACheck54
+	load	r8,Room
+	call	Sub_GetActionVariable		; call get_action_variable()
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	adci	0
+	phi	R7				; R7 = pointer to IA[get_action_variable(pAcVar)]
+	ldn	R8
+	str	R7				; if (ac == 53) IA[get_action_variable(pAcVar)] = room;
+	lbr	DAReturnFalse1
+DACheck54
+	smi	1
+	lbnz	DACheck55
+	load	r8,Room
+	call	Sub_GetActionVariable		; call get_action_variable()
+	str	R8				; if (ac == 54) room = get_action_variable(pAcVar);
+	lbr	DAReturnFalse1
+DACheck55
+	smi	1
+	lbnz	DACheck56
+	lbr	DAAction59			; if (ac == 55 || ac == 59) IA[get_action_variable(pAcVar)] = 0;
+DACheck56
+	smi	1
+	lbnz	DACheck57
+	load	r7,Darkflag
+	ldi	1
+	str	R7				; if (ac == 56) is_dark = true;
+	lbr	DAReturnFalse1
+DACheck57
+	smi	1
+	lbnz	DACheck58
+	load	r7,Darkflag
+	ldi	0
+	str	R7				; if (ac == 57) is_dark = false;
+	lbr	DAReturnFalse1
+DACheck58
+	smi	1
+	bnz	DACheck59
+	load	r7,StateFlags
+	ldi	1
+	phi	R8				; R8.1 = shift register byte
+	call	Sub_GetActionVariable				; call get_action_variable()
+	smi	8
+	BGE  DACheck58Loop
+	inc	R7				; R7 points to StateFlags+1
+	adi	8
+DACheck58Loop
+	bz	DACheck58LoopDone
+	plo	R8				; R8.0 is number of bits remaining to shift
+	ghi	R8
+	SHL				; shift one bit left
+	phi	R8
+	dec	R8
+	glo	R8
+	br	DACheck58Loop
+DACheck58LoopDone
+	ghi	R8				; R8 is byte to OR with StateFlags
+	sex	R7
+	OR				; if (ac == 58) state_flags |= 1 << get_action_variable(pAcVar);
+	str	R7
+	lbr	DAReturnFalse1
+DACheck59
+	smi	1
+	bnz	DACheck60
+DAAction59
+	call	Sub_GetActionVariable				; call get_action_variable()
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	adci	000H
+	phi	R7				; R7 = pointer to IA[get_action_variable(pAcVar)]
+	ldi	0
+	str	R7				; if (ac == 55 || ac == 59) IA[get_action_variable(pAcVar)] = 0;
+	lbr	DAReturnFalse1
+DACheck60
+	smi	1
+	lbnz	DACheck61
+	load	r7,StateFlags
+	ldi	1
+	phi	R8				; R8.1 = shift register byte
+	call	Sub_GetActionVariable				; call get_action_variable()
+	smi	8
+	BGE  DACheck60Loop
+	inc	R7				; R7 points to StateFlags+1
+	adi	8
+DACheck60Loop
+	lbz	DACheck60LoopDone
+	plo	R8				; R8.0 is number of bits remaining to shift
+	ghi	R8
+	SHL				; shift one bit left
+	phi	R8
+	dec	R8
+	glo	R8
+	lbr	DACheck60Loop
+DACheck60LoopDone
+	ghi	R8				; R8 is byte to XOR with StateFlags
+	sex	R7
+	XOR				; if (ac == 60) state_flags ^= 1 << get_action_variable(pAcVar);
+	str	R7
+	lbr	DAReturnFalse1
+DACheck61
+	smi	1
+	lbnz	DACheck62			; if (ac == 61)
+	load	r7,Darkflag
+	ldi	0
+	str	R7				; is_dark = false;
+	inc	R7
+	ldi	RL-1
+	str	R7				; room = RL-1;
+	load	rf,Action1Msg
+	call	f_msg				; print: "I'm dead..."
+	LBR	DADoLook			; look()
+DACheck62
+	smi	1
+	lbnz	DACheck63
+	call	Sub_GetActionVariable		; call get_action_variable()
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	adci	0
+	phi	R7				; R7 = pointer to IA[get_action_variable(pAcVar)]
+	call	Sub_GetActionVariable		; call get_action_variable()
+	str	R7				; if (ac == 62) { i = get_action_variable(pAcVar); IA[i] = (get_action_variable(pAcVar)); }
+	lbr	DAReturnFalse1
+DACheck63
+	smi	1
+	LBNZ	DACheck64
+	load	rf,Action2Msg
+	call	f_msg				; print "The game is now over.\nAnother game? "
+	call	Do_YesNo			; D = 0 if No, 1 if Yes
+	SDI	LOW Endflag
+	plo	RC
+	ldi	HIGH Endflag
+	SMBI	0
+	phi	RC
+	ldi	1
+	str	RC				; set Loadflag or Endflag to 1
+	lbr	DAReturnFalse2
+DACheck64
+	smi	1
+	bnz	DACheck65
+	LBR	DADoLook			; if (ac == 64) look();
+DACheck65
+	smi	1
+	lbnz	DACheck66
+	phi	RC				; RC.1 = count of treasures
+	load	r7,Table_IAS
+	load	r8,Array_IA
+	ldi	IL
+	plo	RC				; RC.0 = item loop counter
+DAAction65Loop
+	lda	R7
+	phi	RD
+	lda	R7
+	plo	RD				; RD = pointer to IAS[i][0]
+	lda	R8				; D = IA[i]
+	smi	TR				; TR = Treasure Room
+	lbnz	DAAction65LoopTail
+	ldn	RD
+	smi	'*'
+	bnz	DAAction65LoopTail
+	ghi	RC
+	adi	001H
+	phi	RC				; j++
+DAAction65LoopTail
+	dec	RC
+	glo	RC
+	lbnz	DAAction65Loop
+	load	rf,Action3_2Msg
+	ghi	RC
+	call	Print2Digit			; convert # of treasures to 2-digit number
+	load	rf,Action3_3Msg
+	ghi	RC
+	adi	LOW ScoreTable
+	plo	RD
+	ldi	HIGH ScoreTable
+	adci	0
+	phi	RD
+	ldn	RD
+	call	Print2Digit			; convert # of treasures to 2-digit number
+	load	rf,Action3_1Msg
+	call	f_msg				; print "I've stored XX treasures.  On a scale of 0 to 99, that rates a XX."
+	ghi	RC
+	smi	TT
+	lbnz	DAReturnFalse2			; continue if not a perfect score
+	load	rf,Action4Msg
+	call	f_msg				; print "Congratulations! You scored a Perfect Game!\r\nThe game is now over.\r\nAnother game? "
+	call	Do_YesNo			; D = 0 if No, 1 if Yes
+	SDI	LOW Endflag
+	plo	RC
+	ldi	HIGH Endflag
+	SMBI	0
+	phi	RC
+	ldi	1
+	str	RC				; set Loadflag or Endflag to 1
+DAReturnFalse2
+	ldi	0
+	retn					; return false (action didn't fail)
+DACheck66
+	smi	1
+	lbnz	DACheck67
+	plo	RC				; RC.0 = line length
+	phi	RC				; RC.1 = not empty flag
+	load	rf,Action5Msg
+	call	f_msg				; print "I'm carrying:\n"
+	load	r1,Table_IAS
+	ldi	0
+	plo	RD				; RD.0 = item index
+DAAction66Loop1
+	glo	RD
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	adci	000H
+	phi	R7				; R7 = pointer to IA[i]
+	lda	R1
+	phi	R8
+	lda	R1
+	plo	R8				; R8 = pointer to IAS[i][0]
+	lda	R7				; D = IA[i]
+	smi	0FFH
+	lbnz	DAAction66Loop1Tail	; skip this item if not in our inventory
+	ghi	RC
+	adi	001H
+	phi	RC				; not empty flag is true
+	glo	RC
+	phi	RD				; temporarily store current line length
+	; figure out how long this item description is
+DAAction66Loop1_1
+	lda	R8
+	lbz	DAAction66Loop1_1Done
+	smi	'/'
+	lbz	DAAction66Loop1_1Done
+	inc	RC				; increment line length
+	lbr	DAAction66Loop1_1
+DAAction66Loop1_1Done
+	glo	RC				; RC is current line length + item description length
+	adi	3
+	smi	MAXLINE
+	bl	DAAction66SkipLinefeed
+	ldi	0
+	phi	RD				; linelen = 0
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type				; print "\r\n"
+DAAction66SkipLinefeed
+	ghi	RD
+	plo	RC				; restore original line length value
+	dec	R1
+	dec	R1
+	lda	R1
+	phi	R8
+	lda	R1
+	plo	R8				; R8 = pointer to IAS[i][0] (again)
+DAAction66Loop1_2			; print the item description
+	lda	R8
+	lbz	DAAction66Loop1_2Done
+	smi	'/'
+	lbz	DAAction66Loop1_2Done
+	inc	RC				; increment line length
+	adi	'/'
+	call	f_type				; print one character
+	lbr	DAAction66Loop1_2
+DAAction66Loop1_2Done
+	ldi	'.'
+	call	f_type
+	ldi	' '
+	call	f_type				; print ". "
+	inc	RC
+	inc	RC				; linelen += 2
+DAAction66Loop1Tail
+	inc	RD
+	glo	RD
+	smi	IL
+	lbnz	DAAction66Loop1
+	ghi	RC
+	LBNZ	DAAction66NotEmpty
+	load	rf,Action6Msg
+	call	f_msg				; print "Nothing!"
+DAAction66NotEmpty
+	load	rf,NewlineMsg			; print "\r\n"
+	call	f_msg
+	lbr	DAReturnFalse3
+DACheck67
+	smi	1
+	bnz	DACheck68
+	load	r7,(StateFlags+1)
+	ldn	R7
+	ORI	1
+	str	R7				; if (ac == 67) state_flags |= 1;
+	lbr	DAReturnFalse3
+DACheck68
+	smi	1
+	lbnz	DACheck69
+	load	r7,(StateFlags+1)
+	ldn	R7
+	XRI	1
+	str	R7				; if (ac == 68) state_flags ^= 1;
+	lbr	DAReturnFalse3
+DACheck69
+	smi	1
+	bnz	DACheck70
+	load	r7,Array_IA+9
+	ldi	0FFH
+	str	R7
+	load	r7,LampOil
+	ldi	LI
+	str	R7				; if (ac == 69) { lamp_oil = LT; IA[9] = -1; }
+	lbr	DAReturnFalse3
+DACheck70
+	smi	1
+	bnz	DACheck71
+	call	ClearScreen			; if (ac == 70) clrscr();
+	lbr	DAReturnFalse3
+DACheck71
+	smi	1
+	lbnz	DACheck72
+	call	Do_SaveGame			; call SaveGame function
+	load	rf,Action7Msg
+	call	f_msg				; print "Game state has been saved in upper memory."
+	lbr	DAReturnFalse3
+DACheck72
+	smi	1
+DADebug1
+	bnz	DADebug1			; deadlock here if invalid 'ac' was found
+	call	Sub_GetActionVariable				; j = get_action_variable()
+	adi	LOW Array_IA
+	plo	R7
+	ldi	HIGH Array_IA
+	ADCI	0
+	phi	R7				; R7 = pointer to IA[j]
+	call	Sub_GetActionVariable				; p = get_action_variable()
+	adi	LOW Array_IA
+	plo	R8
+	ldi	HIGH Array_IA
+	ADCI	0
+	phi	R8				; R8 = pointer to IA[p]
+	ldn	R7
+	plo	RC				; RC.0 = i = IA[j]
+	ldn	R8
+	str	R7				; IA[j] = IA[p]
+	glo	RC
+	str	R8				; IA[p] = i
+
+DAReturnFalse3
+	ldi	0
+	retn					; return false (action didn't fail)
+
+DADoLook
+	glo	R9				; push R9, RA, and RB on the stack
+	stxd
+	ghi	R9
+	stxd
+	glo	RA
+	stxd
+	ghi	RA
+	stxd
+	glo	RB
+	stxd
+	ghi	RB
+	stxd
+	call	Do_Look
+	inc	R2
+	lda	R2
+	phi	RB
+	lda	R2
+	plo	RB
+	lda	R2
+	phi	RA
+	lda	R2
+	plo	RA
+	lda	R2
+	phi	R9
+	ldn	R2
+	plo	R9
+	lbr	DAReturnFalse3
+
+;__________________________________________________________________________________________________
+; Adventure yes_no() function
+
+; IN:       N/A
+; OUT:      D=1 if YES, 0 if NO
+; TRASHED:  R7, R8, RF
+
+Do_YesNo
+	; wait for key press
+	ghi	re
+	ani	0feh
+	phi	re
+	call	f_read
+	phi	rf
+	ghi	re
+	ori	001h
+	phi	re
+	ghi	rf
+	; make character be uppercase
+	ldi	0DFH
+	str	R2
+	ghi	RF
+	and
+	; check for Y and N
+	smi	'N'
+	bz	YN_No
+	smi	'Y'-'N'
+	lbz	YN_Yes
+	lbr	Do_YesNo
+YN_No
+	ghi	RF
+	call	f_type
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type				; print 'n\r\n'
+	ldi	0
+	retn					; return 0
+YN_Yes
+	ghi	RF
+	call	f_type
+	ldi	cr
+	call	f_type
+	ldi	lf
+	call	f_type				; print 'y\r\n'
+	ldi	1
+	retn					; return 1
+
+;__________________________________________________________________________________________________
+; SaveGame function to store game state in file
+
+; IN:       N/A
+; OUT:      N/A
+; TRASHED:  R7, RC, RD, RF
+
+Do_SaveGame:
+	load	rf,SavePath
+	load	rd,SaveFiledes		; savefile descriptor
+	ldi	O_CREAT OR O_TRUNC	; (create, truncate, no append) flags
+	plo	r7
+	call	O_OPEN			; attempt to open file
+	lbnf	SaveOpened		; DF=0, file was opened
+	call	f_inmsg
+	db	'Save file could not be created.',cr,lf,0
+	retn
+;
+SaveOpened:
+	load	rc,SaveLength
+	load	rf,SaveStart
+	load	rd,SaveFiledes
+	call	O_WRITE			; write the save file
+	lbdf	WriteError		; DF=1, write error
+CloseSaveFile:
+	load	rf,SaveFiledes
+	call	O_CLOSE			; close the image file
+	retn
+WriteError:
+	call	f_inmsg
+	db	'Game state could not be saved.',cr,lf,0
+	br	CloseSaveFile
+;
+;__________________________________________________________________________________________________
+; Read-only Data
+
+ScoreTable      DB	0, 7, 15, 22, 30, 38, 45, 53, 60, 68, 76, 83, 91, 99
+ClsMsg		DB	esc,"[#39;7m",esc,"[H",esc,"[J", 0
+StartingMsg     DB	cr,lf,lf,esc,"[1;37mWelcome To ",cr,lf," Adventure+ ",cr,lf," ",esc,"[44m(v1.2 2020-04-20)",esc,"[0m",cr,lf,lf
+		DB	"By: Scott Adams, Morten Lohre, and Richard Goedeken",cr,lf
+NewlineMsg      DB	cr,lf, 0
+LoadQestion     DB	esc,"[36m",cr,lf,"Load saved game (Y or N)?",esc,"[0m ", 0
+LoadFailedMsg   DB	esc,"[1mSorry, but no saved game data was found.",cr,lf,esc,"[0;36mPress a key to continue...",esc,"[0m",cr,lf,0
+LampEmptyMsg    DB	esc,"[31mYour lamp has run out of oil!",esc,"[0m",cr,lf, 0
+LampLow1Msg     DB	esc,"[31mYour lamp will run out of oil in ",0
+LampLow2Msg     DB	" turns!",esc,"[0m",cr,lf,0
+InputPromptMsg  DB	cr,lf,esc,"[36mTell me what to do? ",esc,"[0m",0
+InputError1Msg  DB	esc,"[1mI don't know how to ",0
+InputError2Msg  DB	"!",esc,"[0m",cr,lf, 0
+InputError3Msg  DB	esc,"[1mI don't know what a ", 0
+InputError4Msg  DB	" is!",esc,"[0m",cr,lf, 0
+Look1Msg	DB	esc,"[1;31mI can't see.  It's too dark!",esc,"[0m",cr,lf,0
+Look2Msg	DB	"I'm in a ", 0
+Look3Msg	DB	cr,lf,lf,esc,"[1;34mVisible Items Here:",esc,"[0m",cr,lf,0
+Look4Msg	DB	cr,lf,esc,"[1;34mObvious Exits:",esc,"[0m",cr,lf,"   ", 0
+Turn1Msg	DB	esc,"[36mWhere do you want me to go? Give me a direction too.",esc,"[0m",cr,lf,0
+Turn2Msg	DB	esc,"[1;31mWarning: it's dangerous to move in the dark!",esc,"[0m",cr,lf,0
+Turn3Msg	DB	esc,"[31mI can't go in that direction.",esc,"[0m",cr,lf,0
+Turn4Msg	DB	esc,"[1;31mI fell down and broke my neck.",esc,"[0m",cr,lf,0
+Turn5Msg	DB	esc,"[31mI don't understand your command.",esc,"[0m",cr,lf,0
+Turn6Msg	DB	esc,"[31mI can't do that yet.",esc,"[0m",cr,lf,0
+CarryDrop1Msg   DB	esc,"[1mWhat?",esc,"[0m",cr,lf,0
+CarryDrop2Msg   DB	esc,"[31mI can't. I'm carrying too much!",esc,"[0m",cr,lf,0
+CarryDrop3Msg   DB	esc,"[1mOK, taken.",esc,"[0m",cr,lf,0
+CarryDrop4Msg   DB	esc,"[31mI don't see it here.",esc,"[0m",cr,lf,0
+CarryDrop5Msg   DB	esc,"[1mOK, dropped.",esc,"[0m",cr,lf,0
+CarryDrop6Msg   DB	esc,"[31mI'm not carrying it!",esc,"[0m",cr,lf,0
+CarryDrop7Msg   DB	esc,"[31mIt's beyond my power to do that.",esc,"[0m",cr,lf,0
+Action1Msg      DB	esc,"[1;31mI'm dead...",esc,"[0m",cr,lf,0
+Action2Msg      DB	esc,"[1mThe game is now over.",cr,lf,esc,"[0;36mAnother game? ",esc,"[0m",0
+Action3_1Msg    DB	esc,"[1mI've stored ",esc,"[33m"
+Action3_2Msg    DB	"00 treasures",esc,"[37m.  On a scale",cr,lf,"of 0 to 99, that rates a "
+Action3_3Msg    DB	"00.",esc,"[0m",cr,lf,0
+Action4Msg      DB	esc,"[1mCongratulations! You scored a Perfect Game!",cr,lf,"You are one smart adventurer!",cr,lf
+		DB	esc,"[33mKick back and grab a cold one, you've earned it.",esc,"[0m",cr,lf,lf,"The game is now over.",cr,lf,"Another game? ",0
+Action5Msg      DB	esc,"[1;34m",cr,lf,"I'm carrying:",esc,"[0m",cr,lf,0
+Action6Msg      DB	"Nothing!", 0
+Action7Msg      DB	esc,"[1mGame state has been saved.",esc,"[0m",cr,lf,0
+
+CL  EQU 149
+NL  EQU 60
+RL  EQU 34
+ML  EQU 80
+IL  EQU 61
+MX  EQU 5
+AR  EQU 11
+TT  EQU 13
+LN  EQU 3
+LI  EQU 125
+TR  EQU 3
+MAXLINE  EQU 79
+
+; Array C has dimensions 149 x 16
+Array_C:
+	DB  000H, 04BH, 008H, 001H, 013H, 006H, 008H, 000H, 00AH, 000H, 000H, 000H, 075H, 03EH, 000H, 000H
+	DB  000H, 00AH, 014H, 001H, 015H, 000H, 014H, 000H, 007H, 006H, 000H, 000H, 00CH, 034H, 03BH, 000H
+	DB  000H, 008H, 015H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 00DH, 03DH, 000H, 000H
+	DB  000H, 064H, 00EH, 008H, 01AH, 000H, 00DH, 000H, 00EH, 000H, 000H, 000H, 03BH, 034H, 03CH, 000H
+	DB  000H, 064H, 005H, 008H, 026H, 000H, 029H, 000H, 015H, 000H, 005H, 000H, 037H, 03EH, 03CH, 040H
+	DB  000H, 064H, 018H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 025H, 03FH, 000H, 000H
+	DB  000H, 005H, 007H, 001H, 007H, 000H, 001H, 000H, 00CH, 006H, 000H, 000H, 028H, 03EH, 000H, 000H
+	DB  000H, 005H, 014H, 006H, 015H, 006H, 014H, 000H, 016H, 002H, 007H, 006H, 034H, 02DH, 000H, 000H
+	DB  000H, 008H, 018H, 002H, 007H, 00CH, 000H, 000H, 000H, 000H, 000H, 000H, 00FH, 03DH, 000H, 000H
+	DB  000H, 064H, 005H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 039H, 000H, 000H, 000H
+	DB  000H, 032H, 008H, 001H, 00CH, 006H, 008H, 000H, 037H, 000H, 000H, 000H, 030H, 03BH, 034H, 000H
+	DB  000H, 064H, 007H, 008H, 007H, 000H, 02FH, 000H, 019H, 000H, 000H, 000H, 03CH, 03EH, 042H, 000H
+	DB  000H, 01EH, 02AH, 001H, 015H, 006H, 014H, 006H, 014H, 000H, 000H, 000H, 034H, 02DH, 000H, 000H
+	DB  000H, 032H, 01BH, 002H, 007H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 046H, 004H, 03DH, 000H
+	DB  000H, 064H, 00CH, 008H, 020H, 002H, 024H, 000H, 020H, 000H, 023H, 000H, 035H, 037H, 035H, 000H
+	DB  000H, 064H, 00CH, 008H, 01BH, 002H, 034H, 000H, 01BH, 000H, 000H, 000H, 035H, 037H, 000H, 000H
+	DB  000H, 064H, 001H, 008H, 002H, 009H, 001H, 000H, 002H, 000H, 000H, 000H, 02AH, 03CH, 03AH, 000H
+	DB  000H, 005H, 01AH, 001H, 01AH, 000H, 00DH, 000H, 000H, 000H, 000H, 000H, 011H, 03BH, 034H, 000H
+	DB  000H, 064H, 00CH, 008H, 00CH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 040H, 03CH, 000H, 000H
+	DB  000H, 064H, 00DH, 009H, 00DH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 03AH, 073H, 06BH
+	DB  000H, 064H, 001H, 008H, 002H, 008H, 001H, 000H, 002H, 000H, 000H, 000H, 01BH, 03CH, 03CH, 000H
+	DB  01DH, 010H, 001H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 02EH, 000H, 000H, 000H
+	DB  01DH, 018H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 041H, 000H, 000H, 000H
+	DB  01DH, 036H, 022H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 02EH, 000H, 000H, 000H
+	DB  01DH, 039H, 004H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 02EH, 000H, 000H, 000H
+	DB  00AH, 015H, 007H, 002H, 015H, 001H, 015H, 000H, 007H, 000H, 000H, 000H, 03BH, 034H, 076H, 000H
+	DB  00AH, 02AH, 017H, 002H, 007H, 006H, 018H, 002H, 000H, 000H, 000H, 000H, 00FH, 03DH, 000H, 000H
+	DB  00AH, 015H, 007H, 002H, 014H, 001H, 014H, 000H, 007H, 000H, 000H, 000H, 03BH, 034H, 076H, 000H
+	DB  012H, 02AH, 017H, 001H, 017H, 000H, 019H, 002H, 027H, 000H, 019H, 000H, 03BH, 00EH, 035H, 037H
+	DB  00AH, 017H, 018H, 002H, 007H, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 00FH, 03DH, 000H, 000H
+	DB  00AH, 017H, 018H, 002H, 007H, 001H, 00DH, 006H, 000H, 000H, 000H, 000H, 010H, 000H, 000H, 000H
+	DB  00AH, 017H, 018H, 002H, 007H, 001H, 00DH, 001H, 00DH, 000H, 01AH, 000H, 03BH, 034H, 080H, 000H
+	DB  00AH, 021H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 042H, 000H, 000H, 000H
+	DB  01DH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 046H, 040H, 000H, 000H
+	DB  022H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 042H, 000H, 000H, 000H
+	DB  017H, 000H, 01DH, 001H, 011H, 004H, 017H, 000H, 000H, 000H, 000H, 000H, 036H, 07AH, 039H, 040H
+	DB  00EH, 019H, 01FH, 003H, 01CH, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 013H, 000H, 000H, 000H
+	DB  00EH, 019H, 01FH, 001H, 01CH, 001H, 01FH, 000H, 000H, 000H, 000H, 000H, 015H, 03DH, 03BH, 000H
+	DB  02DH, 02CH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 072H, 000H, 000H, 000H
+	DB  00EH, 019H, 01FH, 002H, 01CH, 001H, 01FH, 000H, 00CH, 000H, 000H, 000H, 046H, 037H, 03AH, 014H
+	DB  001H, 022H, 014H, 004H, 023H, 002H, 013H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  00AH, 019H, 001H, 004H, 028H, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 010H, 000H, 000H, 000H
+	DB  00AH, 019H, 001H, 004H, 028H, 001H, 028H, 000H, 01FH, 000H, 000H, 000H, 03BH, 034H, 07FH, 000H
+	DB  012H, 019H, 01FH, 001H, 01FH, 000H, 028H, 000H, 000H, 000H, 000H, 000H, 03BH, 034H, 017H, 000H
+	DB  00EH, 019H, 012H, 002H, 01CH, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 016H, 000H, 000H, 000H
+	DB  02DH, 035H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 072H, 000H, 000H, 000H
+	DB  001H, 023H, 013H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 019H, 000H, 000H, 000H
+	DB  012H, 00AH, 026H, 001H, 026H, 000H, 01DH, 002H, 001H, 000H, 000H, 000H, 035H, 024H, 03AH, 000H
+	DB  02AH, 02BH, 02EH, 001H, 02EH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 077H, 03BH, 000H, 000H
+	DB  00AH, 00DH, 006H, 002H, 00DH, 001H, 00DH, 000H, 00CH, 000H, 000H, 000H, 03BH, 034H, 000H, 000H
+	DB  006H, 000H, 013H, 004H, 015H, 000H, 024H, 006H, 000H, 000H, 000H, 000H, 036H, 040H, 000H, 000H
+	DB  006H, 000H, 015H, 004H, 013H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 040H, 000H, 000H
+	DB  001H, 023H, 015H, 004H, 019H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 01AH, 000H, 000H, 000H
+	DB  001H, 023H, 015H, 004H, 019H, 005H, 016H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  023H, 00FH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 047H, 000H, 000H, 000H
+	DB  001H, 036H, 022H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 07DH, 000H, 000H, 000H
+	DB  012H, 017H, 01AH, 001H, 019H, 002H, 018H, 000H, 00EH, 000H, 000H, 000H, 035H, 01CH, 03DH, 03AH
+	DB  00AH, 00DH, 006H, 002H, 00DH, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 010H, 000H, 000H, 000H
+	DB  026H, 033H, 003H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 002H, 000H, 000H, 000H
+	DB  001H, 039H, 002H, 000H, 005H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  012H, 00DH, 00CH, 001H, 00CH, 000H, 00DH, 000H, 000H, 000H, 000H, 000H, 03BH, 034H, 01DH, 000H
+	DB  00AH, 01CH, 016H, 002H, 016H, 000H, 00AH, 000H, 000H, 000H, 000H, 000H, 037H, 045H, 037H, 02CH
+	DB  008H, 039H, 005H, 000H, 005H, 002H, 00EH, 00CH, 004H, 000H, 00BH, 001H, 037H, 035H, 008H, 007H
+	DB  027H, 014H, 005H, 004H, 010H, 002H, 00EH, 006H, 000H, 000H, 000H, 000H, 006H, 000H, 000H, 000H
+	DB  025H, 014H, 005H, 004H, 010H, 002H, 00EH, 006H, 000H, 000H, 000H, 000H, 006H, 000H, 000H, 000H
+	DB  018H, 00BH, 00BH, 001H, 003H, 000H, 00BH, 000H, 000H, 000H, 000H, 000H, 01EH, 03AH, 035H, 000H
+	DB  027H, 014H, 010H, 002H, 00EH, 001H, 010H, 000H, 011H, 000H, 000H, 000H, 037H, 035H, 040H, 000H
+	DB  012H, 025H, 024H, 001H, 022H, 005H, 024H, 000H, 000H, 000H, 000H, 000H, 035H, 082H, 000H, 000H
+	DB  006H, 000H, 013H, 004H, 024H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 021H, 03DH, 000H, 000H
+	DB  012H, 025H, 024H, 001H, 022H, 002H, 038H, 000H, 02DH, 000H, 024H, 000H, 035H, 035H, 037H, 081H
+	DB  00AH, 025H, 024H, 002H, 024H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 020H, 034H, 000H, 000H
+	DB  016H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 022H, 000H, 000H, 000H
+	DB  01AH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 041H, 03FH, 000H, 000H
+	DB  00AH, 00AH, 026H, 002H, 019H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 01AH, 000H, 000H, 000H
+	DB  012H, 00AH, 026H, 001H, 01DH, 005H, 029H, 000H, 026H, 000H, 000H, 000H, 023H, 035H, 03BH, 000H
+	DB  007H, 000H, 003H, 008H, 026H, 005H, 003H, 000H, 000H, 000H, 000H, 000H, 06FH, 03CH, 000H, 000H
+	DB  020H, 000H, 003H, 008H, 003H, 000H, 01BH, 002H, 000H, 000H, 000H, 000H, 027H, 03CH, 000H, 000H
+	DB  021H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 041H, 000H, 000H, 000H
+	DB  02FH, 000H, 014H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 071H, 069H, 000H
+	DB  02FH, 000H, 015H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 071H, 069H, 000H
+	DB  001H, 022H, 012H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 066H, 000H, 000H, 000H
+	DB  00AH, 036H, 022H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 033H, 000H, 000H, 000H
+	DB  033H, 000H, 019H, 002H, 02BH, 000H, 012H, 000H, 019H, 000H, 000H, 000H, 029H, 03EH, 037H, 000H
+	DB  012H, 017H, 01AH, 001H, 01BH, 002H, 00EH, 000H, 02CH, 000H, 01BH, 000H, 03AH, 035H, 037H, 02BH
+	DB  031H, 000H, 003H, 008H, 003H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 03CH, 001H, 06EH, 06BH
+	DB  027H, 014H, 011H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 040H, 000H, 000H, 000H
+	DB  001H, 010H, 023H, 002H, 013H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 046H, 036H, 040H, 000H
+	DB  007H, 000H, 003H, 008H, 026H, 000H, 005H, 000H, 003H, 000H, 019H, 002H, 037H, 03AH, 01FH, 03CH
+	DB  02DH, 00BH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 072H, 000H, 000H
+	DB  024H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 02FH, 000H, 000H
+	DB  001H, 039H, 004H, 002H, 003H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  008H, 039H, 005H, 002H, 00BH, 001H, 005H, 000H, 004H, 000H, 00EH, 001H, 037H, 035H, 008H, 000H
+	DB  008H, 039H, 005H, 002H, 00BH, 001H, 005H, 000H, 004H, 000H, 00EH, 002H, 037H, 035H, 008H, 000H
+	DB  028H, 026H, 019H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 01AH, 02FH, 000H, 000H
+	DB  028H, 027H, 01BH, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 07CH, 02FH, 000H, 000H
+	DB  02AH, 00DH, 00CH, 001H, 00CH, 000H, 00DH, 000H, 000H, 000H, 000H, 000H, 003H, 03BH, 034H, 000H
+	DB  02AH, 00DH, 006H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 003H, 000H, 000H, 000H
+	DB  02AH, 02AH, 017H, 001H, 017H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 077H, 03BH, 000H, 000H
+	DB  032H, 000H, 010H, 002H, 003H, 008H, 010H, 000H, 011H, 000H, 003H, 000H, 037H, 035H, 005H, 03CH
+	DB  01BH, 000H, 01AH, 004H, 000H, 00AH, 000H, 000H, 000H, 000H, 000H, 000H, 07BH, 000H, 000H, 000H
+	DB  01BH, 000H, 01AH, 004H, 000H, 00BH, 00AH, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  008H, 000H, 00BH, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 026H, 000H, 000H, 000H
+	DB  02CH, 000H, 02FH, 003H, 00BH, 001H, 00BH, 000H, 019H, 000H, 007H, 000H, 012H, 03EH, 03AH, 000H
+	DB  02CH, 000H, 00BH, 001H, 01AH, 007H, 00BH, 000H, 019H, 000H, 000H, 000H, 012H, 03EH, 042H, 000H
+	DB  01CH, 011H, 009H, 003H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 033H, 000H, 000H, 000H
+	DB  01CH, 011H, 00AH, 003H, 008H, 009H, 030H, 000H, 008H, 000H, 000H, 000H, 031H, 035H, 03AH, 000H
+	DB  01CH, 011H, 00AH, 003H, 00BH, 008H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 000H, 000H, 000H
+	DB  01CH, 011H, 00AH, 003H, 00AH, 008H, 00BH, 000H, 021H, 000H, 030H, 000H, 032H, 03AH, 036H, 03BH
+	DB  01CH, 011H, 00AH, 003H, 009H, 008H, 00AH, 000H, 021H, 000H, 031H, 000H, 032H, 03AH, 036H, 03BH
+	DB  01CH, 011H, 00AH, 003H, 008H, 008H, 031H, 000H, 009H, 000H, 000H, 000H, 031H, 035H, 03AH, 000H
+	DB  033H, 000H, 014H, 001H, 014H, 000H, 015H, 000H, 000H, 000H, 000H, 000H, 078H, 00CH, 03BH, 034H
+	DB  033H, 000H, 015H, 001H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 078H, 00DH, 03DH, 000H
+	DB  01BH, 000H, 01AH, 007H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 07EH, 000H, 000H, 000H
+	DB  017H, 000H, 01DH, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 000H, 000H, 000H
+	DB  02CH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 000H, 000H, 000H
+	DB  00EH, 011H, 009H, 003H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 079H, 000H, 000H, 000H
+	DB  02DH, 039H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 067H, 000H, 000H, 000H
+	DB  012H, 017H, 01AH, 001H, 018H, 000H, 01AH, 000H, 00DH, 000H, 000H, 000H, 035H, 03BH, 034H, 000H
+	DB  02DH, 01EH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 067H, 000H, 000H, 000H
+	DB  02DH, 015H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 067H, 000H, 000H, 000H
+	DB  030H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 068H, 000H, 000H, 000H
+	DB  001H, 039H, 00BH, 004H, 01CH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  02FH, 000H, 01AH, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 069H, 06DH, 000H
+	DB  02FH, 000H, 00BH, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 069H, 000H, 000H
+	DB  02FH, 000H, 013H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 069H, 000H, 000H
+	DB  02FH, 000H, 017H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06AH, 000H, 000H
+	DB  02FH, 000H, 00DH, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06DH, 000H, 000H
+	DB  02FH, 000H, 011H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06DH, 000H, 000H
+	DB  02FH, 000H, 00FH, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06DH, 000H, 000H
+	DB  02FH, 000H, 015H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 069H, 000H, 000H
+	DB  02FH, 000H, 008H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06CH, 000H, 000H
+	DB  025H, 014H, 00EH, 001H, 010H, 002H, 011H, 000H, 010H, 000H, 000H, 000H, 035H, 037H, 040H, 000H
+	DB  001H, 038H, 011H, 002H, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 038H, 046H, 040H
+	DB  00EH, 011H, 00AH, 001H, 00AH, 000H, 009H, 000H, 000H, 000H, 000H, 000H, 03BH, 034H, 00AH, 000H
+	DB  00EH, 013H, 009H, 001H, 009H, 000H, 00AH, 000H, 000H, 000H, 000H, 000H, 03BH, 034H, 009H, 000H
+	DB  00AH, 033H, 003H, 002H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 00BH, 03DH, 000H, 000H
+	DB  001H, 010H, 034H, 002H, 018H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  00AH, 031H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 06FH, 000H, 000H
+	DB  00EH, 000H, 01CH, 001H, 012H, 005H, 000H, 000H, 000H, 000H, 000H, 000H, 018H, 000H, 000H, 000H
+	DB  033H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 000H, 000H, 000H
+	DB  017H, 000H, 01DH, 001H, 011H, 007H, 011H, 000H, 000H, 000H, 000H, 000H, 036H, 07AH, 038H, 040H
+	DB  02FH, 000H, 001H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 069H, 000H, 000H
+	DB  018H, 00BH, 00BH, 006H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 026H, 000H, 000H, 000H
+	DB  02FH, 000H, 014H, 004H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 06EH, 074H, 067H, 000H
+	DB  02DH, 018H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 041H, 000H, 000H, 000H
+	DB  001H, 010H, 004H, 004H, 005H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 036H, 046H, 040H, 000H
+	DB  02FH, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 000H, 000H, 000H
+	DB  008H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 001H, 02FH, 000H, 000H
+	DB  018H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 000H, 070H, 000H, 000H, 000H
+	DB  0FFH
+
+; Array NVS has dimensions 2 x 60 x 4
+Array_NVS   DB    "AUT",0, "GO",0,0, "*ENT", "*RUN", "*WAL", "*CLI", "JUM",0, "BEA",0, "CHO",0, "*CUT"
+	DB    "TAK",0, "*GET", "*PIC", "*CAT", "LIG",0, "*TUR", "*LAM", "*BUR", "DRO",0, "*REL"
+	DB    "*SPI", "*LEA", "STO",0, "AWA",0, "THR",0, "TOS",0, "QUI",0, "SWI",0, "RUB",0, "LOO",0
+	DB    "*SHO", "*SEE", "DRA",0, "SCO",0, "INV",0, "SAV",0, "WAK",0, "UNL",0, "REA",0, "OPE",0
+	DB    "ATT",0, "*KIL", "DRI",0, "*EAT", "BUN",0, "FIN",0, "*LOC", "HEL",0, "SAY",0, "WIN",0
+	DB    "DOO",0, "SCR",0, "*YEL", "*HOL", "NORT", "SOUT", "EAST", "WEST", "UP",0,0, "DOWN"
+	DB    "ANY",0, "NOR",0, "SOU",0, "EAS",0, "WES",0, "UP",0,0, "DOWN", "NET",0, "FIS",0, "AWA",0
+	DB    "MIR",0, "AXE",0, "AXE",0, "WAT",0, "BOT",0, "GAM",0, "HOL",0, "LAM",0, "*ON",0, "OFF",0
+	DB    "DOO",0, "MUD",0, "*MED", "BEE",0, "SCO",0, "GAS",0, "FLI",0, "EGG",0, "OIL",0, "*SLI"
+	DB    "KEY",0, "HEL",0, "BUN",0, "INV",0, "LED",0, "THR",0, "CRO",0, "BRI",0, "BEA",0, "DRA",0
+	DB    "RUG",0, "RUB",0, "HON",0, "FRU",0, "OX",0,0, "RIN",0, "CHI",0, "*BIT", "BRA",0, "SIG",0
+	DB    "BLA",0, "WEB",0, "*WRI", "SWA",0, "LAV",0, "ARO",0, "HAL",0, "TRE",0, "*STU", "FIR",0
+
+; Array DIR has dimensions 6 x 8
+Array_DIR
+	DB	"North",0,0,0
+	DB	"South",0,0,0
+	DB	"East",0,0,0,0
+	DB	"West",0,0,0,0
+	DB	"Up",0,0,0,0,0,0
+	DB	"Down",0
+
+; Array RM has dimensions 34 x 6
+Array_RM
+	DB   0,  7, 10,  1,  0, 24
+	DB  23,  1,  1, 25,  0,  0
+	DB   0,  0,  0,  0,  0,  1
+	DB   1,  1,  1,  1,  1,  4
+	DB   0,  0,  0,  0,  3,  5
+	DB   0,  0,  0,  0,  4,  0
+	DB   0,  0,  0,  0,  5,  7
+	DB   8,  9,  0, 27,  6, 12
+	DB   0,  7,  0,  0,  0,  0
+	DB   7,  0,  0,  0, 20,  0
+	DB  11, 10,  0,  1,  0, 26
+	DB  11, 11, 23, 11,  0,  0      ; AR = 11
+	DB  13, 15, 15,  0,  0, 13
+	DB   0,  0,  0, 14, 12,  0
+	DB  17, 12, 13, 16, 16, 17
+	DB  12,  0, 13, 12, 13,  0
+	DB   0, 17,  0,  0, 14, 17
+	DB  17, 12, 12, 15, 14, 18
+	DB   0,  0,  0,  0, 17,  0
+	DB   0,  0,  0, 20,  0,  0
+	DB   0,  0,  0,  0,  0,  9
+	DB   0,  0,  0,  0,  0,  0
+	DB   0,  0,  0, 21,  0,  0
+	DB  10,  1, 10, 11,  0,  0      ; 23
+	DB   0,  0,  0,  0,  0,  0
+	DB  11,  0,  1, 11,  0,  0
+	DB   0,  0,  0,  0,  0,  0
+	DB   0,  0,  7,  0,  0,  0
+	DB   0,  0,  0,  0,  0, 11
+	DB   0,  0,  0,  0,  0,  0
+	DB   0,  0,  0,  0,  0,  0
+	DB   0,  0,  0,  0,  0,  0
+	DB   0,  0,  0,  0,  0,  0
+	DB   0, 24, 11, 24, 28, 24
+
+
+; String table RSS has length 34
+Table_RSS   DW  RSS00_Msg, RSS01_Msg, RSS02_Msg, RSS03_Msg, RSS04_Msg, RSS05_Msg, RSS06_Msg, RSS07_Msg, RSS08_Msg, RSS09_Msg
+	DW  RSS10_Msg, RSS11_Msg, RSS12_Msg, RSS13_Msg, RSS14_Msg, RSS15_Msg, RSS16_Msg, RSS17_Msg, RSS18_Msg, RSS19_Msg
+	DW  RSS20_Msg, RSS21_Msg, RSS22_Msg, RSS23_Msg, RSS24_Msg, RSS25_Msg, RSS26_Msg, RSS27_Msg, RSS28_Msg, RSS29_Msg
+	DW  RSS30_Msg, RSS31_Msg, RSS32_Msg, RSS33_Msg
+RSS00_Msg   DB    " ", 0
+RSS01_Msg   DB    "dismal swamp.", 0
+RSS02_Msg   DB    "*I'm in the top of a tall cypress tree.", 0
+RSS03_Msg   DB    "large hollow damp stump in the swamp.", 0
+RSS04_Msg   DB    "root chamber under the stump.", 0
+RSS05_Msg   DB    "semi-dark hole by the root chamber.", 0
+RSS06_Msg   DB    "long down-sloping hall.", 0
+RSS07_Msg   DB    "large cavern.", 0
+RSS08_Msg   DB    "large 8-sided room.", 0
+RSS09_Msg   DB    "royal anteroom.", 0
+RSS10_Msg   DB    "*I'm on the shore of a lake.", 0
+RSS11_Msg   DB    "forest.", 0
+RSS12_Msg   DB    "maze of pits.", 0
+RSS13_Msg   DB    "maze of pits.", 0
+RSS14_Msg   DB    "maze of pits.", 0
+RSS15_Msg   DB    "maze of pits.", 0
+RSS16_Msg   DB    "maze of pits.", 0
+RSS17_Msg   DB    "maze of pits.", 0
+RSS18_Msg   DB    "bottom of a chasm.  Above me there are 2 ledges. One has a bricked up",cr,lf,"window.", 0
+RSS19_Msg   DB    "*I'm on a narrow ledge over a chasm. Across the chasm is a ",esc,"[1mthrone",esc,"[0m room.", 0
+RSS20_Msg   DB    "royal chamber.", 0
+RSS21_Msg   DB    "*I'm on a narrow ledge by the throne room.",cr,lf,"Across the chasm is another ledge.", 0
+RSS22_Msg   DB    "throne room.", 0
+RSS23_Msg   DB    "sunny meadow.", 0
+RSS24_Msg   DB    "*",esc,"[1mI think I'm in real trouble.  Here's a guy with a pitchfork!",esc,"[0m", 0
+RSS25_Msg   DB    "hidden grove.", 0
+RSS26_Msg   DB    "quick-sand bog.", 0
+RSS27_Msg   DB    "memory RAM of an IBM-PC.  I took a wrong turn!", 0
+RSS28_Msg   DB    "branch on the top of an old oak tree.",cr,lf,"To the east I see a meadow beyond a lake.", 0
+RSS29_Msg   DB    " ", 0
+RSS30_Msg   DB    " ", 0
+RSS31_Msg   DB    " ", 0
+RSS32_Msg   DB    " ", 0
+RSS33_Msg   DB    "large misty room with strange letters over the exits.", 0
+
+
+; String table MSS has length 81
+Table_MSS   DW  MSS00_Msg, MSS01_Msg, MSS02_Msg, MSS03_Msg, MSS04_Msg, MSS05_Msg, MSS06_Msg, MSS07_Msg, MSS08_Msg, MSS09_Msg
+	DW  MSS10_Msg, MSS11_Msg, MSS12_Msg, MSS13_Msg, MSS14_Msg, MSS15_Msg, MSS16_Msg, MSS17_Msg, MSS18_Msg, MSS19_Msg
+	DW  MSS20_Msg, MSS21_Msg, MSS22_Msg, MSS23_Msg, MSS24_Msg, MSS25_Msg, MSS26_Msg, MSS27_Msg, MSS28_Msg, MSS29_Msg
+	DW  MSS30_Msg, MSS31_Msg, MSS32_Msg, MSS33_Msg, MSS34_Msg, MSS35_Msg, MSS36_Msg, MSS37_Msg, MSS38_Msg, MSS39_Msg
+	DW  MSS40_Msg, MSS41_Msg, MSS42_Msg, MSS43_Msg, MSS44_Msg, MSS45_Msg, MSS46_Msg, MSS47_Msg, MSS48_Msg, MSS49_Msg
+	DW  MSS50_Msg, MSS51_Msg, MSS52_Msg, MSS53_Msg, MSS54_Msg, MSS55_Msg, MSS56_Msg, MSS57_Msg, MSS58_Msg, MSS59_Msg
+	DW  MSS60_Msg, MSS61_Msg, MSS62_Msg, MSS63_Msg, MSS64_Msg, MSS65_Msg, MSS66_Msg, MSS67_Msg, MSS68_Msg, MSS69_Msg
+	DW  MSS70_Msg, MSS71_Msg, MSS72_Msg, MSS73_Msg, MSS74_Msg, MSS75_Msg, MSS76_Msg, MSS77_Msg, MSS78_Msg, MSS79_Msg
+	DW  MSS80_Msg
+MSS00_Msg   DB    " ", 0
+MSS01_Msg   DB    "Nothing happens...", 0
+MSS02_Msg   DB    esc,"[1mFocusing intently on the intricate patterns of the web, I am surprised to",cr,lf,"see the words: ",esc,"[36mCHOP IT DOWN!",esc,"[0m", 0
+MSS03_Msg   DB    esc,"[1mGulp gulp gulp. I didn't realize how thirsty I was!",esc,"[0m", 0
+MSS04_Msg   DB    esc,"[1mThe dragon snorts and rumbles, smelling something offensive. It grimaces and",cr,lf,"opens its eyes, looking straight at me, then charges!",esc,"[0m", 0
+MSS05_Msg   DB    esc,"[1mI hurl the axe at the door and the spinning blade crashes into the lock,",cr,lf,"shattering it. The door swings open.",esc,"[0m", 0
+MSS06_Msg   DB    esc,"[1mI pull on the handle but it's no use; the door is secured with a padlock.",esc,"[0m", 0
+MSS07_Msg   DB    esc,"[1mI saw a flash of light as the treetop crashed to the ground. Something was",cr,lf,"lost in the branches.",esc,"[0m", 0
+MSS08_Msg   DB    esc,"[1mI swing the axe over and over. Chop! Chop! Chop! After a few minutes the giant",cr,lf,"tree heaves over. TIMBER...",esc,"[0m", 0
+MSS09_Msg   DB    esc,"[1mOne quick puff extinguishes the lamp.",esc,"[0m", 0
+MSS10_Msg   DB    esc,"[1mThe lamp pops on and bathes the room in a soft warm glow.",esc,"[0m", 0
+MSS11_Msg   DB    esc,"[1mAs I'm gathering up the web, the spider darts over and bites my hand!",esc,"[0m", 0
+MSS12_Msg   DB    esc,"[1;31mMy chigger bites are now infected.",esc,"[0m", 0
+MSS13_Msg   DB    esc,"[1;31mThe chigger bites have rotted my whole body.",esc,"[0m", 0
+MSS14_Msg   DB    esc,"[1mThe bear lumbers over to the honey, voraciously slurps it all up,",cr,lf,"then falls asleep.",esc,"[0m", 0
+MSS15_Msg   DB    esc,"[1;31mThe bees buzz loudly and swarm angrily around me, then begin to sting me",cr,lf,"all over...",esc,"[0m", 0
+MSS16_Msg   DB    esc,"[1mI don't have any container to put it in!",esc,"[0m", 0
+MSS17_Msg   DB    esc,"[1mI just noticed that the buzzing has stopped. The bees have all suffocated",cr,lf,"in the bottle.",esc,"[0m", 0
+MSS18_Msg   DB    esc,"[1mI speak the ",esc,"[35mmagic",esc,"[37m word and begin to feel dizzy. "
+	    DB    "The world spins around me",cr,lf,"and I close my eyes. After breathing slowly for a few seconds, I open",cr,lf,"my eyes to find that I have been transported.",esc,"[0m", 0
+MSS19_Msg   DB    esc,"[1mI don't have anything that I can use to light the gas!",esc,"[0m", 0
+MSS20_Msg   DB    esc,"[1mThe gas bladder explodes with a loud BANG! A cloud of dust slowly settles.",esc,"[0m", 0
+MSS21_Msg   DB    esc,"[1;31mThe gas bladder explodes violently in my hands and knocks me backwards. I hit",cr,lf,"my head on something.",esc,"[0m", 0
+MSS22_Msg   DB    esc,"[1mAn eerie blue flame glows for a few seconds then goes out. That was neat",cr,lf,"but didn't help you much.",esc,"[0m", 0
+MSS23_Msg   DB    esc,"[1mFffffffff. The swamp gas all rushes out of the wine bladder.",esc,"[0m", 0
+MSS24_Msg   DB    esc,"[1mI don't think that's flammable.",esc,"[0m", 0
+MSS25_Msg   DB    esc,"[1mHow do you want me to get across the chasm? Jump?!",esc,"[0m", 0
+MSS26_Msg   DB    esc,"[1mTo be honest, I'm too scared of the bear to do that. I need to get him out of",cr,lf,"here first.",esc,"[0m", 0
+MSS27_Msg   DB    esc,"[1mDon't waste ",esc,"[33m*HONEY*",esc,"[37m.  Get mad instead.  Dam ",esc,"[31mlava",esc,"[37m!",esc,"[0m", 0
+MSS28_Msg   DB    esc,"[1mThe bees escape from the bottle, buzzing loudly. The bear hears them, looks",cr,lf,"angrily at me, and then ",esc,"[31mcharges to attack me",esc,"[37m!",esc,"[0m", 0
+MSS29_Msg   DB    esc,"[1mI pour out the bottle, its former contents soaking into the ground.",esc,"[0m", 0
+MSS30_Msg   DB    esc,"[36mUsing only one word, tell me at what object you would like me to throw the axe.",esc,"[0m", 0
+MSS31_Msg   DB    esc,"[1mI send the axe spinning towards the bear, but he dodges to the side, and then",cr,lf,"I hear a CRASH! Oh no, something broke.",esc,"[0m", 0
+MSS32_Msg   DB    esc,"[1mI gather up an armload of bricks, straining under the load. They are heavy!",esc,"[0m", 0
+MSS33_Msg   DB    esc,"[1mWith all my strength, I jump heroically off the ledge, but I'm carrying too",cr,lf,"much weight and don't make it across, falling into the chasm.",esc,"[0m", 0
+MSS34_Msg   DB    "To exit the game, say -",esc,"[1mQUIT",esc,"[0m-", 0
+MSS35_Msg   DB    esc,"[1;31mThe mirror slips out of my hands, hits the floor, and shatters into a million",cr,lf,"pieces.",esc,"[0m", 0
+MSS36_Msg   DB    esc,"[1mThe mirror slips out of my hands but miraculously lands softly on the rug.",cr,lf,"It then begins to glow, and a message appears: ", esc,"[33mDRAGON STINGS",esc,"[0m", 0
+MSS37_Msg   DB    esc,"[1;31mYou lost *ALL* treasures.",esc,"[0m", 0
+MSS38_Msg   DB    esc,"[1mI'm not carrying the axe. Try 'TAKE INVENTORY'!",esc,"[0m", 0
+MSS39_Msg   DB    esc,"[1mThe axe ricochets wildly off of the dragon's thick hide.",cr,lf,"The dragon does not even wake up.",esc,"[0m", 0
+MSS40_Msg   DB    esc,"[1mThe caked-on mud has become dry and fallen off of my arm.",esc,"[0m", 0
+MSS41_Msg   DB    esc,"[1mAs I scream, the bear turns to look at me with a started expression on its",cr,lf,"face. As the bear twists, it loses its balance and falls off the ledge!",esc,"[0m", 0
+MSS42_Msg   DB    esc,"[1mThe message fades after a few seconds. I don't understand what",cr,lf,"this means, but I hope you do!",esc,"[0m", 0
+MSS43_Msg   DB    esc,"[1mThe bees swarm around the dragon, which wakes up to their incessant buzzing,",cr,lf,"and flies away...",esc,"[0m", 0
+MSS44_Msg   DB    esc,"[1mThe magical oil has attracted a ",esc,"[33mmagical lamp",esc,"[37m, which appears in your hands. The",cr,lf,"lamp is now full of oil and burning with a blue flame.",esc,"[0m", 0
+MSS45_Msg   DB    esc,"[1;31mArgh! I've been bitten by chiggers! I hate these things. This cannot be good.",esc,"[0m", 0
+MSS46_Msg   DB    esc,"[1mIt looks exactly like I'd expect it to look. Maybe I should go there?",esc,"[0m", 0
+MSS47_Msg   DB    esc,"[1mMaybe if I threw something?...",esc,"[0m", 0
+MSS48_Msg   DB    esc,"[1;31mThis poor fish is dry with no water around, and has now died. That's a bummer.",esc,"[0m", 0
+MSS49_Msg   DB    esc,"[1mA glowing genie appears, ",esc,"[33mdrops something shiny",esc,"[37m, and then vanishes.",esc,"[0m", 0
+MSS50_Msg	DB	esc,"[1mA genie appears and says, ",34,esc,"[31mboy, you're selfish!",esc,"[37m",34," He takes something and then",cr,lf
+		DB	"vanishes!",esc,"[0m", 0
+MSS51_Msg   DB    esc,"[1mNO!  It's too ",esc,"[31mhot",esc,"[0m", 0
+MSS52_Msg   DB    esc,"[1mThere's no way for me to climb up to the ledges from down here.",esc,"[0m", 0
+MSS53_Msg   DB    esc,"[1mTry the swamp.",esc,"[0m", 0
+MSS54_Msg   DB    esc,"[1mDon't use the verb 'say'. Just give me one word.",esc,"[0m", 0
+MSS55_Msg   DB    esc,"[1mTry:  LOOK,JUMP,SWIM,CLIMB,THROW,FIND,GO,TAKE,INVENTORY,SCORE,HELP.",esc,"[0m", 0
+MSS56_Msg   DB    esc,"[1mOnly 3 things will wake the dragon. One of them is ",esc,"[31mdangerous",esc,"[37m!",esc,"[0m", 0
+MSS57_Msg   DB    "If you need a hint on something, try '",esc,"[1mHELP",esc,"[0m'.", 0
+MSS58_Msg   DB    esc,"[1mRead the sign in the meadow!",esc,"[0m", 0
+MSS59_Msg   DB    esc,"[1mYou may need ",esc,"[35mmagic",esc,"[37m words here.",esc,"[0m", 0
+MSS60_Msg   DB    esc,"[1mA loud, low voice rumbles from all around me, saying:",esc,"[0m", 0
+MSS61_Msg   DB    esc,"[1mPLEASE LEAVE IT ALONE!",esc,"[0m", 0
+MSS62_Msg   DB    esc,"[1mI don't think it's a good idea to throw that.",esc,"[0m", 0
+MSS63_Msg   DB    esc,"[1mMedicine is good for bites.",esc,"[0m", 0
+MSS64_Msg   DB    esc,"[1mSorry, but I can't find it anywhere around here.",esc,"[0m", 0
+MSS65_Msg   DB    "Treasures have a ",esc,"[1;33m*",esc,"[0m in their name.  Say '",esc,"[1mSCORE",esc,"[0m'", 0
+MSS66_Msg   DB    esc,"[1mBLOW IT UP",esc,"[0m", 0
+MSS67_Msg   DB    esc,"[1mThe ",esc,"[33mgolden fish",esc,"[37m wriggles out of your hands and slips back into the lake.",esc,"[0m", 0
+MSS68_Msg   DB    esc,"[1mEwww. The smooth goo stinks to high heaven. But rubbing it into the chigger",cr,lf,"bites feels good.",esc,"[0m", 0
+MSS69_Msg   DB    esc,"[1mIt tastes delicious! Yet I miss it now that it's gone. Maybe that wasn't such",cr,lf,"a good idea.",esc,"[0m", 0
+MSS70_Msg   DB    esc,"[1mArgh! These chigger bites itch like mad! Scratching them feels good for a few",cr,lf,"seconds, but then they get ",esc,"[31meven worse",esc,"[37m.",esc,"[0m", 0
+MSS71_Msg   DB    esc,"[1mThe lamp is already lit.",esc,"[0m", 0
+MSS72_Msg   DB    esc,"[1mThe thick persian rug unfurls itself and I hop on. Just by thinking the",cr,lf,"",esc,"[35mmagic",esc,"[37m word, it lifts me up and flies away...",esc,"[0m", 0
+MSS73_Msg   DB    esc,"[1mI swim out into the lake, but I'm carrying too much and ",esc,"[31mbegin sinking",esc,"[37m, so I",cr,lf,"swim back to shore.",esc,"[0m", 0
+MSS74_Msg   DB    esc,"[1mI'm not so sure that it's a good idea to attack the dragon.",esc,"[0m", 0
+MSS75_Msg   DB    esc,"[1mI'm not going in the ",esc,"[31mlava",esc,"[37m! You go in the ",esc,"[31mlava",esc,"[37m! That's way too hot.",esc,"[0m", 0
+MSS76_Msg   DB    esc,"[1mI don't see any place to go swimming around here.",esc,"[0m", 0
+MSS77_Msg   DB    esc,"[1mI hold the empty bladder near the bubbling swamp and pull it open, sucking",cr,lf,"the gas into the bladder.",esc,"[0m", 0
+MSS78_Msg   DB    esc,"[1mI manage to coax a few of the bees into the empty bottle without getting stung!",esc,"[0m", 0
+MSS79_Msg   DB    esc,"[1mI heave the bricks towards the ",esc,"[31mlava",esc,"[37m, into which they fall, forming a makeshift",cr,lf,"dam, and stopping the ",esc,"[31mlava",esc,"[37m flow.", 0
+MSS80_Msg   DB    esc,"[1mOK, dropped.",esc,"[0m",cr,lf,"", 0
+
+; String table IAS has length 61
+Table_IAS   DW  IAS00_Msg, IAS01_Msg, IAS02_Msg, IAS03_Msg, IAS04_Msg, IAS05_Msg, IAS06_Msg, IAS07_Msg, IAS08_Msg, IAS09_Msg
+	DW  IAS10_Msg, IAS11_Msg, IAS12_Msg, IAS13_Msg, IAS14_Msg, IAS15_Msg, IAS16_Msg, IAS17_Msg, IAS18_Msg, IAS19_Msg
+	DW  IAS20_Msg, IAS21_Msg, IAS22_Msg, IAS23_Msg, IAS24_Msg, IAS25_Msg, IAS26_Msg, IASesc_Msg, IAS28_Msg, IAS29_Msg
+	DW  IAS30_Msg, IAS31_Msg, IAS32_Msg, IAS33_Msg, IAS34_Msg, IAS35_Msg, IAS36_Msg, IAS37_Msg, IAS38_Msg, IAS39_Msg
+	DW  IAS40_Msg, IAS41_Msg, IAS42_Msg, IAS43_Msg, IAS44_Msg, IAS45_Msg, IAS46_Msg, IAS47_Msg, IAS48_Msg, IAS49_Msg
+	DW  IAS50_Msg, IAS51_Msg, IAS52_Msg, IAS53_Msg, IAS54_Msg, IAS55_Msg, IAS56_Msg, IAS57_Msg, IAS58_Msg, IAS59_Msg
+	DW  IAS60_Msg
+IAS00_Msg   DB    " ", 0
+IAS01_Msg   DB    "Dark hole", 0
+IAS02_Msg   DB    "*",esc,"[1;31mPOT OF RUBIES",esc,"[0m*/RUB/", 0
+IAS03_Msg   DB    "Spider web with writing on it.", 0
+IAS04_Msg   DB    "Hollow ",esc,"[1mstump",esc,"[0m and remains of a felled tree.", 0
+IAS05_Msg   DB    "Cypress tree", 0
+IAS06_Msg   DB    "Water", 0
+IAS07_Msg   DB    "Evil smelling mud/MUD/", 0
+IAS08_Msg   DB    "*",esc,"[1;33mGOLDEN FISH",esc,"[0m*/FIS/", 0
+IAS09_Msg   DB    "Brass lamp (",esc,"[33mlit",esc,"[0m)/LAM/", 0
+IAS10_Msg   DB    "Old fashioned brass lamp/LAM/", 0
+IAS11_Msg   DB    "Axe (rusty, with a ",esc,"[35mmagic",esc,"[37m word: ",esc,"[1mBUNYON",esc,"[0m on it)/AXE/", 0
+IAS12_Msg   DB    "Bottle (filled with water)/BOT/", 0
+IAS13_Msg   DB    "Empty bottle/BOT/", 0
+IAS14_Msg   DB    "Ring of skeleton keys/KEY/", 0
+IAS15_Msg   DB    "Sign: LEAVE TREASURE HERE (say '",esc,"[1mSCORE",esc,"[0m')", 0
+IAS16_Msg   DB    "Door (locked)", 0
+IAS17_Msg   DB    "Door (open, with a ",esc,"[1mhallway",esc,"[0m beyond)", 0
+IAS18_Msg   DB    "Swamp gas", 0
+IAS19_Msg   DB    "*",esc,"[1;33mGOLDEN NET",esc,"[0m*/NET/", 0
+IAS20_Msg   DB    esc,"[1;31mChigger bites",esc,"[0m", 0
+IAS21_Msg   DB    esc,"[1;31mInfected chigger bites",esc,"[0m", 0
+IAS22_Msg   DB    "Floating patch of oily slime", 0
+IAS23_Msg   DB    "*",esc,"[1;33mROYAL HONEY",esc,"[0m*/HON/", 0
+IAS24_Msg   DB    "Large african bees", 0
+IAS25_Msg   DB    "Thin black bear", 0
+IAS26_Msg   DB    "Bottle (with bees buzzing inside)/BOT/", 0
+IASesc_Msg   DB    "Large sleeping dragon", 0
+IAS28_Msg   DB    "Flint and steel/FLI/", 0
+IAS29_Msg   DB    "*",esc,"[1;34mTHICK PERSIAN RUG",esc,"[0m*/RUG/", 0
+IAS30_Msg   DB    "Sign: ",esc,"[35mMAGIC",esc,"[37m WORD IS ",esc,"[1mAWAY",esc,"[0m. LOOK LA -(rest of sign is missing)", 0
+IAS31_Msg   DB    "Bladder (swollen with swamp gas)/BLA/", 0
+IAS32_Msg   DB    "Bricked up window", 0
+IAS33_Msg   DB    "Sign: IN SOME CASES MUD IS GOOD, IN OTHERS...", 0
+IAS34_Msg   DB    "Stream of ",esc,"[31mlava",esc,"[0m", 0
+IAS35_Msg   DB    "Bricked up window with a hole blown out of the center,",cr,lf,"leading to a narrow ",esc,"[1;37mledge",esc,"[0m",0
+IAS36_Msg   DB    "Loose fire bricks", 0
+IAS37_Msg   DB    "*",esc,"[1;33mGOLD CROWN",esc,"[0m*/CRO/", 0
+IAS38_Msg   DB    "*",esc,"[1mMAGIC MIRROR",esc,"[0m*/MIR/", 0
+IAS39_Msg   DB    "Thin black bear (asleep)", 0
+IAS40_Msg   DB    "Empty wine bladder/BLA/", 0
+IAS41_Msg   DB    "Shards of broken glass", 0
+IAS42_Msg   DB    esc,"[1;31mChiggers",esc,"[0m/CHI/", 0
+IAS43_Msg   DB    "Thin black bear (dead)", 0
+IAS44_Msg   DB    "*",esc,"[1mDRAGON EGGS",esc,"[0m* (very rare)/EGG/", 0
+IAS45_Msg   DB    "Makeshift dam, consisting of a pile of bricks, holding back the ",esc,"[31mlava",esc,"[0m.", 0
+IAS46_Msg   DB    "*",esc,"[1;32mJEWELED FRUIT",esc,"[0m*/FRU/", 0
+IAS47_Msg   DB    "*",esc,"[1;34mSMALL STATUE OF A BLUE OX",esc,"[0m*/OX/", 0
+IAS48_Msg   DB    "*",esc,"[1mDIAMOND RING",esc,"[0m*/RIN/", 0
+IAS49_Msg   DB    "*",esc,"[1mDIAMOND BRACELET",esc,"[0m*/BRA/", 0
+IAS50_Msg   DB    "Elaborate carvings on rock which form the message: ALADDIN WAS HERE", 0
+IAS51_Msg   DB    "Sign: LIMBO.  FIND RIGHT EXIT AND LIVE AGAIN!", 0
+IAS52_Msg   DB    "Smoking hole.  Pieces of dragon and gore.", 0
+IAS53_Msg   DB    "Sign: NO SWIMMING ALLOWED", 0
+IAS54_Msg   DB    "Arrow (pointing down)", 0
+IAS55_Msg   DB    "Dead golden fish/FIS/", 0
+IAS56_Msg   DB    "*",esc,"[1;31mFIRESTONE",esc,"[0m* (cold now)/FIR/", 0
+IAS57_Msg   DB    "Sign: PAUL'S PLACE", 0
+IAS58_Msg   DB    "Trees", 0
+IAS59_Msg   DB    " ", 0
+IAS60_Msg   DB    " ", 0
+
+
+; Array I2 has length 61
+Array_I2    DB   0,  4,  4,  2,  0,  1, 10,  1, 10,  0
+	DB   3, 10,  3,  0,  2,  3,  5,  0,  1, 18
+	DB   0,  0,  1,  8,  8, 21,  0, 23, 13, 17
+	DB  18,  0, 20, 23, 18,  0,  0, 22, 21,  0
+	DB   9,  0,  1,  0,  0,  0, 25, 26,  0,  0
+	DB  14, 33,  0, 10, 17,  0,  0, 25, 11,  0
+	DB   0
+;
+splash:	db	esc,'[#39;7m',esc,'[H',esc,'[J'
+	db	01bh,05bh,030h,03bh,031h,03bh,034h,034h,06dh,0dbh,0dfh,0dbh
+	db	020h,020h,020h,0dch,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	0dch,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,0dbh,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,0dch,020h,046h,069h,06eh,064h,020h
+	db	074h,072h,065h,061h,073h,075h,072h,065h,073h,02ch,020h,061h,06eh,064h,020h,073h
+	db	061h,076h,065h,020h,074h,068h,065h,06dh,020h,069h,06eh,020h,00dh,00ah,0dbh,0dch
+	db	0dbh,020h,0dch,0dch,0dbh,020h,0dbh,020h,0dbh,020h,0dbh,0dfh,020h,0dbh,0dfh,0dch
+	db	020h,0dbh,0dch,020h,0dbh,020h,0dbh,020h,0dbh,0dfh,020h,0dbh,0dfh,020h,0dbh,020h
+	db	0dbh,0dfh,0dbh,020h,0dbh,0dfh,0dch,020h,0dch,0dch,0dbh,020h,074h,068h,065h,020h
+	db	070h,072h,06fh,070h,065h,072h,020h,070h,06ch,061h,063h,065h,020h,074h,06fh,020h
+	db	073h,063h,06fh,072h,065h,020h,070h,06fh,069h,06eh,074h,073h,02eh,00dh,00ah,0dbh
+	db	020h,0dbh,020h,0dbh,020h,0dbh,020h,0dfh,0dch,0dfh,020h,0dbh,0dfh,020h,0dbh,020h
+	db	0dbh,020h,0dbh,020h,020h,0dbh,020h,0dbh,020h,0dbh,020h,020h,0dbh,0dfh,020h,0dbh
+	db	020h,0dbh,0dfh,0dbh,020h,0dbh,020h,0dbh,020h,0dbh,020h,0dbh,020h,054h,079h,070h
+	db	065h,020h,063h,06fh,06dh,06dh,061h,06eh,064h,073h,020h,06ch,069h,06bh,065h,020h
+	db	045h,041h,053h,054h,02ch,020h,047h,045h,054h,020h,041h,058h,045h,02ch,00dh,00ah
+	db	0dfh,020h,0dfh,020h,0dfh,0dfh,0dfh,020h,020h,0dfh,020h,020h,0dfh,0dfh,020h,0dfh
+	db	020h,0dfh,020h,0dfh,0dfh,020h,0dfh,0dfh,0dfh,020h,0dfh,020h,020h,0dfh,0dfh,020h
+	db	0dfh,020h,0dfh,020h,0dfh,020h,0dfh,020h,0dfh,020h,0dfh,0dfh,0dfh,020h,049h,04eh
+	db	056h,045h,04eh,054h,04fh,052h,059h,02ch,020h,04ch,04fh,04fh,04bh,02ch,020h,053h
+	db	041h,056h,045h,020h,047h,041h,04dh,045h,02ch,020h,051h,055h,049h,054h,02eh,00dh
+	db	00ah,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch
+	db	07ch,07ch,01bh,05bh,034h,034h,06dh,020h,020h,020h,01bh,05bh,034h,033h,06dh,05ch
+	db	01bh,05bh,033h,033h,03bh,034h,034h,06dh,0dch,020h,020h,020h,0dch,01bh,05bh,033h
+	db	030h,03bh,034h,033h,06dh,02fh,01bh,05bh,034h,034h,06dh,020h,020h,01bh,05bh,034h
+	db	033h,06dh,07ch,01bh,05bh,034h,034h,06dh,020h,020h,020h,020h,020h,01bh,05bh,031h
+	db	03bh,033h,033h,06dh,0dch,0dch,0dch,0dch,01bh,05bh,030h,03bh,033h,030h,03bh,034h
+	db	033h,06dh,02fh,02fh,01bh,05bh,033h,033h,03bh,034h,034h,06dh,0dfh,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,01bh,05bh,033h,037h,06dh,0dfh,0dfh,01bh,05bh,031h,03bh
+	db	034h,037h,06dh,02dh,05ch,05fh,05ch,05fh,05ch,05ch,020h,07ch,020h,07ch,020h,02fh
+	db	020h,02fh,020h,02fh,02dh,01bh,05bh,030h,03bh,034h,034h,06dh,0dfh,0dfh,020h,00dh
+	db	00ah,01bh,05bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch
+	db	01bh,05bh,034h,034h,06dh,020h,020h,020h,020h,01bh,05bh,033h,033h,06dh,0dfh,01bh
+	db	05bh,033h,030h,03bh,034h,033h,06dh,05ch,01bh,05bh,033h,033h,03bh,034h,034h,06dh
+	db	0dch,01bh,05bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,01bh,05bh,034h,034h,06dh
+	db	020h,020h,020h,01bh,05bh,034h,033h,06dh,05ch,05ch,01bh,05bh,034h,034h,06dh,020h
+	db	020h,01bh,05bh,031h,03bh,033h,033h,06dh,0dch,0dbh,0dbh,0dbh,01bh,05bh,034h,033h
+	db	06dh,0dfh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,01bh,05bh
+	db	031h,03bh,033h,033h,03bh,034h,034h,06dh,0dbh,0dch,020h,020h,01bh,05bh,030h,03bh
+	db	034h,034h,06dh,02ah,020h,053h,06fh,06dh,065h,020h,069h,074h,065h,06dh,073h,020h
+	db	064h,06fh,020h,06dh,061h,067h,069h,063h,061h,06ch,020h,020h,020h,0dfh,01bh,05bh
+	db	031h,03bh,034h,037h,06dh,05ch,05ch,05fh,05ch,07ch,07ch,07ch,07ch,02fh,05fh,02fh
+	db	01bh,05bh,030h,03bh,034h,034h,06dh,0dfh,020h,020h,020h,020h,020h,020h,00dh,00ah
+	db	01bh,05bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh
+	db	05bh,034h,034h,06dh,020h,020h,020h,020h,01bh,05bh,033h,033h,06dh,0dch,01bh,05bh
+	db	033h,030h,03bh,034h,033h,06dh,02fh,02fh,01bh,05bh,033h,033h,03bh,034h,034h,06dh
+	db	0dfh,020h,020h,020h,020h,020h,01bh,05bh,033h,030h,03bh,034h,033h,06dh,05ch,05ch
+	db	01bh,05bh,031h,03bh,033h,033h,03bh,034h,034h,06dh,0deh,0dbh,01bh,05bh,034h,033h
+	db	06dh,0dfh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,02fh,01bh
+	db	05bh,031h,03bh,033h,033h,06dh,0dch,01bh,05bh,034h,034h,06dh,0dbh,0dbh,0dbh,0dbh
+	db	020h,020h,020h,01bh,05bh,030h,03bh,034h,034h,06dh,074h,068h,069h,06eh,067h,073h
+	db	02eh,020h,046h,069h,067h,075h,072h,069h,06eh,067h,020h,06fh,075h,074h,020h,020h
+	db	020h,020h,020h,020h,020h,0dfh,01bh,05bh,031h,03bh,034h,037h,06dh,05ch,05ch,07ch
+	db	07ch,02fh,02fh,01bh,05bh,030h,03bh,034h,034h,06dh,0dfh,020h,020h,020h,020h,020h
+	db	020h,020h,020h,00dh,00ah,01bh,05bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch
+	db	07ch,07ch,07ch,07ch,02fh,02fh,02fh,02fh,02fh,01bh,05bh,033h,033h,03bh,034h,034h
+	db	06dh,0dfh,020h,020h,020h,020h,020h,020h,01bh,05bh,033h,030h,03bh,034h,033h,06dh
+	db	05ch,05ch,05ch,02fh,02fh,02fh,01bh,05bh,031h,03bh,033h,033h,06dh,0dch,0dbh,01bh
+	db	05bh,034h,034h,06dh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,020h,020h,020h,01bh,05bh,030h
+	db	03bh,034h,034h,06dh,057h,048h,041h,054h,020h,069h,073h,020h,070h,061h,072h,074h
+	db	020h,06fh,066h,020h,074h,068h,065h,020h,066h,075h,06eh,021h,020h,020h,020h,020h
+	db	020h,01bh,05bh,031h,03bh,034h,037h,06dh,07ch,07ch,07ch,07ch,01bh,05bh,034h,034h
+	db	06dh,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,00dh,00ah,01bh,05bh,030h
+	db	03bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh
+	db	031h,03bh,033h,037h,03bh,034h,034h,06dh,05ch,020h,07ch,020h,02fh,020h,020h,020h
+	db	020h,020h,01bh,05bh,030h,03bh,033h,033h,03bh,034h,034h,06dh,0dch,01bh,05bh,033h
+	db	030h,03bh,034h,033h,06dh,02fh,02fh,02fh,01bh,05bh,033h,033h,03bh,034h,034h,06dh
+	db	0dfh,020h,01bh,05bh,031h,06dh,0dfh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dfh,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,01bh,05bh
+	db	030h,03bh,033h,034h,03bh,034h,033h,06dh,0dfh,02fh,07ch,07ch,07ch,05ch,05ch,0dfh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,00dh,00ah,01bh,05bh,033h,030h,06dh,07ch
+	db	07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh,034h,034h,06dh,020h,01bh,05bh,031h,03bh
+	db	033h,037h,06dh,05ch,07ch,02fh,020h,020h,020h,020h,01bh,05bh,030h,03bh,033h,033h
+	db	03bh,034h,034h,06dh,0dch,01bh,05bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,02fh
+	db	01bh,05bh,033h,033h,03bh,034h,034h,06dh,0dfh,020h,020h,020h,020h,020h,01bh,05bh
+	db	031h,06dh,0dfh,0dfh,0dfh,0dfh,0dfh,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,01bh,05bh,030h,03bh,033h,034h,03bh,034h,033h,06dh
+	db	0dfh,02fh,020h,02fh,020h,07ch,07ch,020h,05ch,020h,05ch,0dfh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,00dh,00ah,01bh,05bh,033h,030h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch
+	db	01bh,05bh,031h,03bh,033h,037h,03bh,034h,034h,06dh,02dh,02dh,058h,02dh,02dh,02dh
+	db	01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,02fh,02fh,01bh,05bh
+	db	033h,033h,03bh,034h,034h,06dh,0dfh,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,01bh,05bh,033h,032h,06dh,0dch,0dch,0b2h,0b2h,0b2h,0dch,0b2h,0b2h,0b2h
+	db	0dch,0b2h,0b2h,0b2h,0b2h,0b2h,0dch,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,01bh,05bh,033h,034h,03bh,034h,033h,06dh,0dbh,0dfh,0dfh,02fh,020h
+	db	02fh,020h,02fh,020h,07ch,020h,07ch,020h,05ch,020h,05ch,020h,0dfh,0dfh,0dbh,0dbh
+	db	0dbh,00dh,00ah,01bh,05bh,033h,030h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh
+	db	05bh,034h,034h,06dh,020h,01bh,05bh,031h,03bh,033h,037h,06dh,02fh,07ch,05ch,020h
+	db	01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,02fh,02fh,02fh,02fh,01bh,05bh
+	db	034h,034h,06dh,020h,020h,020h,01bh,05bh,033h,032h,06dh,0dch,0b2h,0b2h,0b2h,0b2h
+	db	0dch,0dch,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h
+	db	0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0dbh,0dch,0dch,020h,020h,0dch,0dch,0dch,0dch,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,033h,030h,03bh,034h
+	db	032h,06dh,0dch,0dch,0dch,0dch,0dch,01bh,05bh,033h,032h,03bh,034h,034h,06dh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dch,00dh,00ah,01bh,05bh,033h,030h,03bh,034h,033h
+	db	06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh,031h,03bh,033h,037h,03bh,034h
+	db	034h,06dh,02fh,020h,07ch,020h,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh
+	db	02fh,02fh,02fh,02fh,01bh,05bh,034h,034h,06dh,020h,020h,020h,01bh,05bh,033h,032h
+	db	06dh,0dch,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h
+	db	0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,01bh,05bh
+	db	034h,036h,06dh,0dbh,020h,020h,020h,0dbh,0dbh,0dbh,0dbh,01bh,05bh,033h,030h,03bh
+	db	034h,032h,06dh,0dch,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dch,0dch
+	db	01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0dch,020h,020h,020h,0dch,01bh
+	db	05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dch,0dch,020h,01bh,05bh,034h,032h
+	db	06dh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dch,01bh,05bh,030h,03bh
+	db	033h,030h,03bh,034h,032h,06dh,0dch,0dch,020h,020h,020h,020h,020h,00dh,00ah,01bh
+	db	05bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,05ch,02fh,02fh,02fh,02fh
+	db	02fh,02fh,01bh,05bh,034h,032h,06dh,020h,020h,020h,020h,020h,01bh,05bh,033h,032h
+	db	03bh,034h,034h,06dh,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h,0b2h
+	db	01bh,05bh,033h,030h,03bh,034h,032h,06dh,0deh,0deh,0feh,0deh,0feh,0deh,0feh,0deh
+	db	0deh,0deh,020h,0deh,020h,0ddh,0feh,01bh,05bh,033h,032h,03bh,034h,036h,06dh,0dbh
+	db	020h,020h,020h,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,031h,03bh,034h,030h,06dh,0deh
+	db	0dbh,0dbh,0dbh,0dch,0dch,0dch,0dbh,0dbh,0dbh,0dbh,0deh,01bh,05bh,034h,032h,06dh
+	db	0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh,01bh,05bh,034h,032h,06dh,0dbh,01bh,05bh
+	db	034h,030h,06dh,0dbh,01bh,05bh,034h,032h,06dh,0dbh,01bh,05bh,034h,030h,06dh,0dbh
+	db	0dch,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0dch,020h,020h,020h,00dh
+	db	00ah,01bh,05bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,07ch,02fh,02fh
+	db	02fh,02fh,02fh,01bh,05bh,031h,03bh,033h,033h,03bh,034h,032h,06dh,020h,020h,03ch
+	db	03eh,03ch,020h,020h,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0ddh,0deh
+	db	0deh,0deh,0feh,0deh,0deh,0feh,0deh,0deh,020h,01bh,05bh,033h,032h,03bh,034h,036h
+	db	06dh,0dbh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh
+	db	020h,020h,020h,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,033h,030h,03bh,034h,032h
+	db	06dh,0dfh,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dfh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dch,0dfh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h
+	db	06dh,0dfh,0dfh,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dfh,01bh,05bh
+	db	033h,033h,06dh,0dch,01bh,05bh,033h,032h,06dh,0deh,01bh,05bh,034h,032h,06dh,0dbh
+	db	0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh,01bh,05bh,030h,03bh,033h,030h,03bh,034h
+	db	032h,06dh,0ddh,020h,020h,00dh,00ah,01bh,05bh,034h,033h,06dh,07ch,07ch,07ch,07ch
+	db	07ch,07ch,07ch,07ch,02fh,02fh,02fh,01bh,05bh,033h,032h,03bh,034h,036h,06dh,0dbh
+	db	0dbh,0dfh,03bh,03bh,03bh,03bh,027h,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh,0dfh
+	db	0dfh,0dfh,0dfh,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,0dch,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,033h,030h
+	db	03bh,034h,032h,06dh,0deh,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dbh
+	db	01bh,05bh,033h,037h,03bh,034h,031h,06dh,0dfh,01bh,05bh,034h,032h,06dh,0ddh,01bh
+	db	05bh,033h,032h,03bh,034h,030h,06dh,0dbh,01bh,05bh,033h,037h,03bh,034h,031h,06dh
+	db	0dfh,01bh,05bh,034h,032h,06dh,0ddh,01bh,05bh,033h,032h,03bh,034h,030h,06dh,0dbh
+	db	0dbh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0ddh,020h,020h,020h,01bh
+	db	05bh,031h,03bh,033h,033h,03bh,034h,030h,06dh,0deh,0dbh,0ddh,01bh,05bh,033h,032h
+	db	06dh,0dbh,01bh,05bh,034h,032h,06dh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh
+	db	01bh,05bh,034h,032h,06dh,020h,020h,00dh,00ah,01bh,05bh,030h,03bh,033h,030h,03bh
+	db	034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh,033h,032h,03bh
+	db	034h,036h,06dh,0dbh,0dbh,0dbh,0dbh,0dbh,03bh,03bh,03bh,03bh,03bh,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,0dch,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,01bh,05bh,031h,03bh,034h,030h,06dh,0deh,0dbh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dfh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0dfh,020h,020h,020h
+	db	01bh,05bh,031h,03bh,033h,033h,03bh,034h,030h,06dh,0deh,01bh,05bh,034h,037h,06dh
+	db	0dbh,0dbh,01bh,05bh,033h,032h,03bh,034h,030h,06dh,0deh,01bh,05bh,034h,032h,06dh
+	db	0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh,01bh,05bh,030h,03bh,033h,030h,03bh
+	db	034h,032h,06dh,0ddh,020h,020h,00dh,00ah,01bh,05bh,034h,033h,06dh,07ch,07ch,07ch
+	db	07ch,07ch,01bh,05bh,033h,037h,06dh,0dch,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,032h
+	db	06dh,0dbh,0dch,01bh,05bh,033h,032h,03bh,034h,036h,06dh,0dbh,0dbh,0dch,03bh,03bh
+	db	03bh,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,0dch,0dch,01bh,05bh,034h,032h,06dh,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,01bh,05bh,033h,030h
+	db	06dh,0deh,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dbh,0dfh,0dbh,0dfh
+	db	0dbh,0dfh,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0ddh,020h,020h,020h
+	db	01bh,05bh,031h,03bh,033h,033h,03bh,034h,030h,06dh,0deh,01bh,05bh,034h,037h,06dh
+	db	0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh,033h,032h,03bh,034h,032h,06dh
+	db	0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh,034h,032h,06dh,020h
+	db	020h,020h,00dh,00ah,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch
+	db	07ch,07ch,07ch,01bh,05bh,033h,037h,06dh,0dfh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h
+	db	032h,06dh,0dbh,0dfh,01bh,05bh,033h,032h,03bh,034h,036h,06dh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dch,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,0dch,0dch
+	db	0dch,0dch,0dch,0dch,0dch,01bh,05bh,034h,032h,06dh,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,01bh,05bh
+	db	033h,030h,06dh,0dfh,01bh,05bh,031h,03bh,033h,032h,03bh,034h,030h,06dh,0dfh,0dfh
+	db	0dfh,0dch,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0ddh,020h,020h,020h
+	db	01bh,05bh,031h,03bh,033h,033h,03bh,034h,030h,06dh,0deh,01bh,05bh,034h,037h,06dh
+	db	0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh,033h,032h,03bh,034h,032h,06dh
+	db	0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh,01bh,05bh,030h,03bh,033h,030h
+	db	03bh,034h,032h,06dh,0ddh,020h,020h,020h,00dh,00ah,01bh,05bh,034h,033h,06dh,07ch
+	db	07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh,031h,03bh,034h,032h,06dh,0dbh,0ddh
+	db	01bh,05bh,030h,03bh,033h,032h,03bh,034h,036h,06dh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dch,020h,020h,020h,020h,020h,020h,020h,020h,0dch,01bh,05bh,034h
+	db	032h,06dh,020h,01bh,05bh,033h,037h,06dh,02ah,020h,04eh,06fh,074h,065h,020h,074h
+	db	068h,061h,074h,020h,067h,06fh,069h,06eh,067h,020h,069h,06eh,020h,074h,068h,065h
+	db	020h,020h,020h,01bh,05bh,031h,03bh,033h,033h,03bh,034h,031h,06dh,0b0h,0dbh,0dbh
+	db	0b0h,01bh,05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0dfh,020h,020h,0dch,01bh
+	db	05bh,031h,03bh,033h,033h,03bh,034h,030h,06dh,0dch,0dbh,0dbh,0dbh,01bh,05bh,033h
+	db	032h,06dh,0deh,01bh,05bh,034h,032h,06dh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh
+	db	0dbh,0ddh,01bh,05bh,030h,03bh,033h,032h,06dh,0dbh,01bh,05bh,034h,032h,06dh,020h
+	db	020h,020h,00dh,00ah,01bh,05bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch
+	db	07ch,07ch,07ch,07ch,01bh,05bh,031h,03bh,034h,032h,06dh,0deh,0dbh,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,01bh,05bh,033h,037h,06dh,049h,01bh,05bh,034h
+	db	036h,06dh,049h,049h,049h,049h,049h,049h,01bh,05bh,034h,032h,06dh,049h,020h,020h
+	db	020h,020h,01bh,05bh,030h,03bh,034h,032h,06dh,06fh,070h,070h,06fh,073h,069h,074h
+	db	065h,020h,064h,069h,072h,065h,063h,074h,069h,06fh,06eh,020h,020h,020h,020h,020h
+	db	020h,01bh,05bh,031h,03bh,033h,033h,03bh,034h,031h,06dh,0b0h,0b2h,0dbh,0b2h,01bh
+	db	05bh,034h,032h,06dh,020h,020h,020h,01bh,05bh,034h,030h,06dh,0deh,0dbh,01bh,05bh
+	db	034h,037h,06dh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dfh,01bh,05bh,033h,032h,06dh
+	db	0dch,01bh,05bh,034h,032h,06dh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh
+	db	0ddh,01bh,05bh,034h,032h,06dh,020h,020h,020h,020h,00dh,00ah,01bh,05bh,030h,03bh
+	db	033h,030h,03bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh
+	db	034h,032h,06dh,020h,01bh,05bh,031h,06dh,0dbh,0ddh,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,01bh,05bh,030h,03bh,033h,032h,03bh,034h,033h,06dh,0ddh,01bh
+	db	05bh,033h,030h,06dh,05ch,05ch,05ch,05ch,05ch,01bh,05bh,033h,032h,06dh,0deh,01bh
+	db	05bh,034h,032h,06dh,020h,020h,020h,020h,01bh,05bh,033h,037h,06dh,077h,06fh,06eh
+	db	027h,074h,020h,061h,06ch,077h,061h,079h,073h,020h,067h,065h,074h,020h,079h,06fh
+	db	075h,020h,020h,020h,020h,01bh,05bh,031h,03bh,033h,033h,03bh,034h,031h,06dh,0b2h
+	db	0dbh,0b2h,01bh,05bh,034h,032h,06dh,020h,020h,020h,01bh,05bh,034h,030h,06dh,0deh
+	db	01bh,05bh,034h,037h,06dh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh
+	db	033h,032h,06dh,0dbh,01bh,05bh,034h,032h,06dh,0dbh,01bh,05bh,034h,030h,06dh,0dbh
+	db	01bh,05bh,034h,032h,06dh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0dbh,01bh
+	db	05bh,030h,03bh,033h,030h,03bh,034h,032h,06dh,0ddh,020h,020h,020h,00dh,00ah,01bh
+	db	05bh,034h,033h,06dh,07ch,07ch,07ch,07ch,07ch,07ch,07ch,07ch,01bh,05bh,034h,032h
+	db	06dh,020h,01bh,05bh,031h,06dh,0deh,0dbh,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,01bh,05bh,033h,037h,06dh,049h,049h,01bh,05bh,034h,036h,06dh,049h,049h
+	db	049h,049h,049h,01bh,05bh,034h,032h,06dh,049h,01bh,05bh,030h,03bh,034h,032h,06dh
+	db	020h,020h,020h,062h,061h,063h,06bh,020h,077h,068h,065h,072h,065h,020h,079h,06fh
+	db	075h,020h,077h,065h,072h,065h,021h,020h,020h,020h,01bh,05bh,031h,03bh,033h,033h
+	db	03bh,034h,031h,06dh,0b1h,0b2h,0b1h,01bh,05bh,034h,032h,06dh,020h,020h,020h,01bh
+	db	05bh,034h,030h,06dh,0deh,01bh,05bh,034h,037h,06dh,0dbh,0dbh,0dbh,0dbh,01bh,05bh
+	db	033h,032h,03bh,034h,030h,06dh,0deh,01bh,05bh,034h,032h,06dh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh,034h,032h,06dh,020h
+	db	020h,020h,00dh,00ah,01bh,05bh,030h,03bh,033h,030h,03bh,034h,033h,06dh,07ch,07ch
+	db	07ch,07ch,07ch,07ch,05ch,05ch,05ch,01bh,05bh,034h,032h,06dh,020h,01bh,05bh,031h
+	db	06dh,0dbh,0ddh,01bh,05bh,030h,03bh,033h,032h,03bh,034h,036h,06dh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dch,020h,020h,020h,020h,020h,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh
+	db	0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,031h,03bh,033h,033h,03bh,034h
+	db	031h,06dh,0b0h,0b1h,01bh,05bh,034h,032h,06dh,020h,020h,020h,01bh,05bh,030h,03bh
+	db	033h,030h,03bh,034h,032h,06dh,0deh,01bh,05bh,031h,03bh,033h,033h,03bh,034h,037h
+	db	06dh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,034h,030h,06dh,0ddh,01bh,05bh,033h,032h
+	db	03bh,034h,032h,06dh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,0dbh,01bh,05bh,030h
+	db	03bh,033h,030h,03bh,034h,032h,06dh,0ddh,020h,020h,00dh,00ah,01bh,05bh,031h,03bh
+	db	033h,037h,03bh,034h,030h,06dh,028h,04ch,065h,065h,020h,048h,061h,072h,074h,02ch
+	db	020h,034h,02fh,031h,038h,02fh,032h,030h,032h,030h,029h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h
+	db	020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,020h,01bh,05bh,035h,06dh
+	db	050h,052h,045h,053h,053h,020h,041h,04eh,059h,020h,04bh,045h,059h,020h,054h,04fh
+	db	020h,043h,04fh,04eh,054h,049h,04eh,055h,045h,01bh,05bh,030h,06dh,000h
+;
+SavePath:	db	'/BIN/adven-1.dat',0
+;__________________________________________________________________________________________________
+; Read/Write Data
+
+Array_TPS       BLK		80      ; These data members must all stay in this order
+SaveStart	EQU		$
+Array_IA	BLK		IL
+Array_NV	DB		0, 0
+Loadflag	DB		0
+Endflag		DB		0
+Darkflag	DB		0
+Room		DB		0
+LampOil		DB		0
+StateFlags      DW		0
+SaveLength	EQU		$-SaveStart
+
+Rand_VarX       DB		18      ; These data members must all stay in this order
+Rand_VarA       DB		166
+Rand_VarB       DB		220
+Rand_VarC       DB		64
+
+PrintNumber     DB		0,0,0   ; temporary location for storing 2-digit number to print
+
+SaveFiledes:
+	db	0,0,0,0
+	dw	SaveDTA
+	db	0,0
+	db	0
+	db	0,0,0,0
+	dw	0,0
+	db	0,0,0,0
+;
+endrom	equ	$
+;
+SaveDTA:	ds	512
+
+	end
