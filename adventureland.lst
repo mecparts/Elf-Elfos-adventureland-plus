@@ -150,8 +150,39 @@
                         O_SETDEF:  equ     0345h               ; set/get default directory
                         O_KINIT:   equ     0348h               ; reserved - do not use!!!
                         O_INMSG:   equ     034bh               ; passthrough for console output
+                        O_GETDEV:  equ     034eh               ; passthrough to f_getdef
+                        O_GETTOD:  equ     0351h               ; passthrough to f_gettod
+                        O_SETTOD:  equ     0354h               ; passthrough to f_settod
+                        O_INPUTL:  equ     0357h               ; passthrough to f_inputl
+                        O_BOOT:    equ     035ah               ; passthrough to f_boot
+                        O_TTY:     equ     035dh               ; passthrough to f_tty
+                        O_SETBD:   equ     0360h               ; passthrough to f_setbd
+                        O_INITCALL: equ    0363h               ; passthrough to f_initcall
+                        O_BRKTEST: equ     0366h               ; passthrough to f_brktest
+                        O_DEVCTRL: equ     0369h               ; passthrough to deverr
+                        O_ALLOC:   equ     036ch               ; passthrough to alloc
+                        O_DEALLOC: equ     036fh               ; passthrough to dealloc
+                        I_SERVE:   equ     03f6h               ; address of interrupt chain head
+                        V_IVEC:    equ     03fdh               ; interrupt head
+                        V_DVEC:    equ     036ah               ; device head
+                        K_VER:     equ     0400h               ; kernel version number
+                        K_BUILD:   equ     0403h               ; kernel build number
+                        K_BMONTH:  equ     0405h               ; kernel build month
+                        K_BDAY:    equ     0406h               ; kernel build day
+                        K_BYEAR:   equ     0407h               ; kernel build month
+                        K_HIMEM:   equ     0442h               ; high memory pointer
+                        K_HEAP:    equ     044dh               ; heap pointer
+                        K_CLKFREQ: equ     0470h               ; system clock frequency
+                        K_MONTH:   equ     0475h               ; date/time
+                        K_DAY:     equ     0476h
+                        K_YEAR:    equ     0477h
+                        K_HOUR:    equ     0478h
+                        K_MINUTE:  equ     0479h
+                        K_SECOND:  equ     047ah
+                        K_SECDEN:  equ     047bh
+                        K_SECNUM:  equ     047dh
                         ;
-                        O_HIMEM:   equ     0442h               ; himem value
+                        ;O_HIMEM:   equ     0442h               ; himem value
                         O_DATTIM:  equ     0475h               ; date/time block
                         ;
                         errexists: equ     1
@@ -198,11 +229,11 @@
                         ; build information, with build number and text.
                         ; **************************************************
                         ;
-   2002   86            date:	db	80h+6		; Month: June
-   2003   18            	db	24		; Day 24
+   2002   87            date:	db	80h+7		; Month: July
+   2003   14            	db	20		; Day 20
    2004   07 e5         	dw	2021		; year = 2021
                         ;
-   2006   00 02         build:	dw	2		; build number
+   2006   00 03         build:	dw	3		; build number
    2008   40 43 6f 70   	db	'@Copyleft 2021 Wayne Hortensius',0
    200c   79 6c 65 66   
    2010   74 20 32 30   
@@ -6830,7 +6861,7 @@
    72a6   45 1b 5b 30   
    72aa   6d 00         
                         ;
-   72ac   2f 42 49 4e   SavePath:	db	'/BIN/adven-1.dat',0
+   72ac   2f 62 69 6e   SavePath:	db	'/bin/adven-1.dat',0
    72b0   2f 61 64 76   
    72b4   65 6e 2d 31   
    72b8   2e 64 61 74   
@@ -6932,60 +6963,67 @@ f809  f_utype       fff9  f_version     f81e  f_wrnvr       ff1e  f_wrtsec
 2222  GIParseLoop4    2240  GIParseLoop5    2249  GIParseLoop5_1    2272  GIParseLoop5_1_1
 226c  GIParseLoop5_1Match    2253  GIParseLoop5_1Next1    228f  GIParseLoop5_1Next2    2293  GIParseLoop5_1Next3
 2281  GIParseLoop5_1NoMatch    2269  GIParseLoop5_1WordEnd    2299  GIParseLoop5Tail    22ce  GIParseVerbOk
-2086  GRLoop1       5c74  IAS00_Msg     5c76  IAS01_Msg     5c80  IAS02_Msg 
-5ca0  IAS03_Msg     5cbf  IAS04_Msg     5cf2  IAS05_Msg     5cff  IAS06_Msg 
-5d05  IAS07_Msg     5d1c  IAS08_Msg     5d3a  IAS09_Msg     5d59  IAS10_Msg 
-5d77  IAS11_Msg     5dbb  IAS12_Msg     5ddb  IAS13_Msg     5ded  IAS14_Msg 
-5e08  IAS15_Msg     5e38  IAS16_Msg     5e46  IAS17_Msg     5e71  IAS18_Msg 
-5e7b  IAS19_Msg     5e98  IAS20_Msg     5eb1  IAS21_Msg     5ed3  IAS22_Msg 
-5ef0  IAS23_Msg     5f0e  IAS24_Msg     5f21  IAS25_Msg     5f31  IAS26_Msg 
-5f6e  IAS28_Msg     5f83  IAS29_Msg     5fa7  IAS30_Msg     5ff6  IAS31_Msg 
-601c  IAS32_Msg     602e  IAS33_Msg     605c  IAS34_Msg     6074  IAS35_Msg 
-60d1  IAS36_Msg     60e3  IAS37_Msg     6100  IAS38_Msg     611c  IAS39_Msg 
-6135  IAS40_Msg     614d  IAS41_Msg     6164  IAS42_Msg     617d  IAS43_Msg 
-6194  IAS44_Msg     61bb  IAS45_Msg     620a  IAS46_Msg     622a  IAS47_Msg 
-6255  IAS48_Msg     6271  IAS49_Msg     6291  IAS50_Msg     62d5  IAS51_Msg 
-6303  IAS52_Msg     632d  IAS53_Msg     6347  IAS54_Msg     635d  IAS55_Msg 
-6373  IAS56_Msg     639a  IAS57_Msg     63ad  IAS58_Msg     63b3  IAS59_Msg 
-63b5  IAS60_Msg     5f58  IASesc_Msg    003d  IL            2d23  InputError1Msg
-2d3c  InputError2Msg    2d44  InputError3Msg    2d5d  InputError4Msg    2d03  InputPromptMsg
-2ca5  LampEmptyMsg    2cce  LampLow1Msg    2cf5  LampLow2Msg    2114  LampNotEmpty
-7350  LampOil       000a  lf            2303  LGNext1       007d  LI        
-239a  LKLoop1       23cc  LKLoop1_1     23d9  LKLoop1_1Tail    23af  LKLoop1Next1
-23e3  LKLoop1Tail    23fb  LKLoop2       240f  LKLoop2Next1    2423  LKLoop2Tail
-236c  LKNotDark     2389  LKPrintRoom1    0003  LN            2318  LoadFailed
-2c4f  LoadFailedMsg    734c  Loadflag      2325  LoadOpened    2c29  LoadQestion
-2d68  Look1Msg      2d92  Look2Msg      2d9c  Look3Msg      2dc0  Look4Msg  
-20d8  MainGetInput    20c0  MainLoad      2149  MainLoopTail    213d  MainNoLamp
-004f  MAXLINE       0050  ML            421f  MSS00_Msg     4221  MSS01_Msg 
-4234  MSS02_Msg     42a9  MSS03_Msg     42e5  MSS04_Msg     4371  MSS05_Msg 
-43e8  MSS06_Msg     443a  MSS07_Msg     44a4  MSS08_Msg     4518  MSS09_Msg 
-4546  MSS10_Msg     4588  MSS11_Msg     45d6  MSS12_Msg     4604  MSS13_Msg 
-463c  MSS14_Msg     469a  MSS15_Msg     46fb  MSS16_Msg     472c  MSS17_Msg 
-478e  MSS18_Msg     4860  MSS19_Msg     489f  MSS20_Msg     48f2  MSS21_Msg 
-4962  MSS22_Msg     49ce  MSS23_Msg     4a13  MSS24_Msg     4a3b  MSS25_Msg 
-4a76  MSS26_Msg     4ad9  MSS27_Msg     4b27  MSS28_Msg     4bb4  MSS29_Msg 
-4c00  MSS30_Msg     4c59  MSS31_Msg     4cd8  MSS32_Msg     4d2c  MSS33_Msg 
-4dbf  MSS34_Msg     4de4  MSS35_Msg     4e46  MSS36_Msg     4edc  MSS37_Msg 
-4f01  MSS38_Msg     4f39  MSS39_Msg     4f9d  MSS40_Msg     4fdf  MSS41_Msg 
-507b  MSS42_Msg     50e2  MSS43_Msg     514a  MSS44_Msg     51e3  MSS45_Msg 
-523c  MSS46_Msg     528a  MSS47_Msg     52b1  MSS48_Msg     530b  MSS49_Msg 
-5360  MSS50_Msg     53ca  MSS51_Msg     53e9  MSS52_Msg     5431  MSS53_Msg 
-5448  MSS54_Msg     5481  MSS55_Msg     54cd  MSS56_Msg     551d  MSS57_Msg 
-5552  MSS58_Msg     5577  MSS59_Msg     55a8  MSS60_Msg     55e6  MSS61_Msg 
-5605  MSS62_Msg     563b  MSS63_Msg     565f  MSS64_Msg     5698  MSS65_Msg 
-56da  MSS66_Msg     56ed  MSS67_Msg     5748  MSS68_Msg     57af  MSS69_Msg 
-5813  MSS70_Msg     589b  MSS71_Msg     58bc  MSS72_Msg     5944  MSS73_Msg 
-59b7  MSS74_Msg     59fb  MSS75_Msg     5a5a  MSS76_Msg     5a94  MSS77_Msg 
-5b02  MSS78_Msg     5b5a  MSS79_Msg     5be3  MSS80_Msg     0005  MX        
-2c26  NewlineMsg    003c  NL            0004  O_APPND       0324  O_CHDIR   
+2086  GRLoop1       03f6  I_SERVE       5c74  IAS00_Msg     5c76  IAS01_Msg 
+5c80  IAS02_Msg     5ca0  IAS03_Msg     5cbf  IAS04_Msg     5cf2  IAS05_Msg 
+5cff  IAS06_Msg     5d05  IAS07_Msg     5d1c  IAS08_Msg     5d3a  IAS09_Msg 
+5d59  IAS10_Msg     5d77  IAS11_Msg     5dbb  IAS12_Msg     5ddb  IAS13_Msg 
+5ded  IAS14_Msg     5e08  IAS15_Msg     5e38  IAS16_Msg     5e46  IAS17_Msg 
+5e71  IAS18_Msg     5e7b  IAS19_Msg     5e98  IAS20_Msg     5eb1  IAS21_Msg 
+5ed3  IAS22_Msg     5ef0  IAS23_Msg     5f0e  IAS24_Msg     5f21  IAS25_Msg 
+5f31  IAS26_Msg     5f6e  IAS28_Msg     5f83  IAS29_Msg     5fa7  IAS30_Msg 
+5ff6  IAS31_Msg     601c  IAS32_Msg     602e  IAS33_Msg     605c  IAS34_Msg 
+6074  IAS35_Msg     60d1  IAS36_Msg     60e3  IAS37_Msg     6100  IAS38_Msg 
+611c  IAS39_Msg     6135  IAS40_Msg     614d  IAS41_Msg     6164  IAS42_Msg 
+617d  IAS43_Msg     6194  IAS44_Msg     61bb  IAS45_Msg     620a  IAS46_Msg 
+622a  IAS47_Msg     6255  IAS48_Msg     6271  IAS49_Msg     6291  IAS50_Msg 
+62d5  IAS51_Msg     6303  IAS52_Msg     632d  IAS53_Msg     6347  IAS54_Msg 
+635d  IAS55_Msg     6373  IAS56_Msg     639a  IAS57_Msg     63ad  IAS58_Msg 
+63b3  IAS59_Msg     63b5  IAS60_Msg     5f58  IASesc_Msg    003d  IL        
+2d23  InputError1Msg    2d3c  InputError2Msg    2d44  InputError3Msg    2d5d  InputError4Msg
+2d03  InputPromptMsg    0406  K_BDAY        0405  K_BMONTH      0403  K_BUILD   
+0407  K_BYEAR       0470  K_CLKFREQ     0476  K_DAY         044d  K_HEAP    
+0442  K_HIMEM       0478  K_HOUR        0479  K_MINUTE      0475  K_MONTH   
+047b  K_SECDEN      047d  K_SECNUM      047a  K_SECOND      0400  K_VER     
+0477  K_YEAR        2ca5  LampEmptyMsg    2cce  LampLow1Msg    2cf5  LampLow2Msg
+2114  LampNotEmpty    7350  LampOil       000a  lf            2303  LGNext1   
+007d  LI            239a  LKLoop1       23cc  LKLoop1_1     23d9  LKLoop1_1Tail
+23af  LKLoop1Next1    23e3  LKLoop1Tail    23fb  LKLoop2       240f  LKLoop2Next1
+2423  LKLoop2Tail    236c  LKNotDark     2389  LKPrintRoom1    0003  LN        
+2318  LoadFailed    2c4f  LoadFailedMsg    734c  Loadflag      2325  LoadOpened
+2c29  LoadQestion    2d68  Look1Msg      2d92  Look2Msg      2d9c  Look3Msg  
+2dc0  Look4Msg      20d8  MainGetInput    20c0  MainLoad      2149  MainLoopTail
+213d  MainNoLamp    004f  MAXLINE       0050  ML            421f  MSS00_Msg 
+4221  MSS01_Msg     4234  MSS02_Msg     42a9  MSS03_Msg     42e5  MSS04_Msg 
+4371  MSS05_Msg     43e8  MSS06_Msg     443a  MSS07_Msg     44a4  MSS08_Msg 
+4518  MSS09_Msg     4546  MSS10_Msg     4588  MSS11_Msg     45d6  MSS12_Msg 
+4604  MSS13_Msg     463c  MSS14_Msg     469a  MSS15_Msg     46fb  MSS16_Msg 
+472c  MSS17_Msg     478e  MSS18_Msg     4860  MSS19_Msg     489f  MSS20_Msg 
+48f2  MSS21_Msg     4962  MSS22_Msg     49ce  MSS23_Msg     4a13  MSS24_Msg 
+4a3b  MSS25_Msg     4a76  MSS26_Msg     4ad9  MSS27_Msg     4b27  MSS28_Msg 
+4bb4  MSS29_Msg     4c00  MSS30_Msg     4c59  MSS31_Msg     4cd8  MSS32_Msg 
+4d2c  MSS33_Msg     4dbf  MSS34_Msg     4de4  MSS35_Msg     4e46  MSS36_Msg 
+4edc  MSS37_Msg     4f01  MSS38_Msg     4f39  MSS39_Msg     4f9d  MSS40_Msg 
+4fdf  MSS41_Msg     507b  MSS42_Msg     50e2  MSS43_Msg     514a  MSS44_Msg 
+51e3  MSS45_Msg     523c  MSS46_Msg     528a  MSS47_Msg     52b1  MSS48_Msg 
+530b  MSS49_Msg     5360  MSS50_Msg     53ca  MSS51_Msg     53e9  MSS52_Msg 
+5431  MSS53_Msg     5448  MSS54_Msg     5481  MSS55_Msg     54cd  MSS56_Msg 
+551d  MSS57_Msg     5552  MSS58_Msg     5577  MSS59_Msg     55a8  MSS60_Msg 
+55e6  MSS61_Msg     5605  MSS62_Msg     563b  MSS63_Msg     565f  MSS64_Msg 
+5698  MSS65_Msg     56da  MSS66_Msg     56ed  MSS67_Msg     5748  MSS68_Msg 
+57af  MSS69_Msg     5813  MSS70_Msg     589b  MSS71_Msg     58bc  MSS72_Msg 
+5944  MSS73_Msg     59b7  MSS74_Msg     59fb  MSS75_Msg     5a5a  MSS76_Msg 
+5a94  MSS77_Msg     5b02  MSS78_Msg     5b5a  MSS79_Msg     5be3  MSS80_Msg 
+0005  MX            2c26  NewlineMsg    003c  NL            036c  O_ALLOC   
+0004  O_APPND       035a  O_BOOT        0366  O_BRKTEST     0324  O_CHDIR   
 0300  O_CLDBOOT     0312  O_CLOSE       0001  O_CREAT       0475  O_DATTIM  
-0318  O_DELETE      031e  O_EXEC        0342  O_EXECBIN     0442  O_HIMEM   
-034b  O_INMSG       0339  O_INPUT       0348  O_KINIT       0321  O_MKDIR   
-0333  O_MSG         0306  O_OPEN        0315  O_OPENDIR     033f  O_PRINT   
-033c  O_PRTSTAT     032a  O_RDLUMP      0309  O_READ        0336  O_READKEY 
-031b  O_RENAME      0327  O_RMDIR       030f  O_SEEK        0345  O_SETDEF  
-0002  O_TRUNC       0330  O_TYPE        030c  O_WRITE       032d  O_WRLUMP  
+036f  O_DEALLOC     0318  O_DELETE      0369  O_DEVCTRL     031e  O_EXEC    
+0342  O_EXECBIN     034e  O_GETDEV      0351  O_GETTOD      0363  O_INITCALL
+034b  O_INMSG       0339  O_INPUT       0357  O_INPUTL      0348  O_KINIT   
+0321  O_MKDIR       0333  O_MSG         0306  O_OPEN        0315  O_OPENDIR 
+033f  O_PRINT       033c  O_PRTSTAT     032a  O_RDLUMP      0309  O_READ    
+0336  O_READKEY     031b  O_RENAME      0327  O_RMDIR       030f  O_SEEK    
+0360  O_SETBD       0345  O_SETDEF      0354  O_SETTOD      0002  O_TRUNC   
+035d  O_TTY         0330  O_TYPE        030c  O_WRITE       032d  O_WRLUMP  
 0303  O_WRMBOOT     2043  P2D_Ones      204a  P2D_OnesDone    202d  P2D_Tens  
 2034  P2D_TensDone    2028  Print2Digit    7357  PrintNumber    0000  r0        
 0001  r1            000a  r10           000b  r11           000c  r12       
@@ -7015,6 +7053,6 @@ f809  f_utype       fff9  f_version     f81e  f_wrnvr       ff1e  f_wrtsec
 2559  TULoop1Tail2    24cf  TUNoDirection    245f  TUNoGo        2579  TUNotCarryDrop
 2491  TUNotDark     2590  TUPrintAndReturn    2de1  Turn1Msg      2e21  Turn2Msg  
 2e5b  Turn3Msg      2e84  Turn4Msg      2eb0  Turn5Msg      2edc  Turn6Msg  
-2575  TURunCarryDrop    24c9  TUSetRoom     2b6b  WriteError    2aec  YN_No     
-2afd  YN_Yes        
+2575  TURunCarryDrop    24c9  TUSetRoom     036a  V_DVEC        03fd  V_IVEC    
+2b6b  WriteError    2aec  YN_No         2afd  YN_Yes        
 

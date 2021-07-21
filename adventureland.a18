@@ -58,11 +58,11 @@ O_TRUNC	equ	00000010b
 ; build information, with build number and text.
 ; **************************************************
 ;
-date:	db	80h+6		; Month: June
-	db	24		; Day 24
+date:	db	80h+7		; Month: July
+	db	20		; Day 20
 	dw	2021		; year = 2021
 ;
-build:	dw	2		; build number
+build:	dw	3		; build number
 	db	'@Copyleft 2021 Wayne Hortensius',0
 
 ;__________________________________________________________________________________________________
@@ -2594,7 +2594,7 @@ splash:	db	esc,'[#39;7m',esc,'[H',esc,'[J'
 	db	050h,052h,045h,053h,053h,020h,041h,04eh,059h,020h,04bh,045h,059h,020h,054h,04fh
 	db	020h,043h,04fh,04eh,054h,049h,04eh,055h,045h,01bh,05bh,030h,06dh,000h
 ;
-SavePath:	db	'/BIN/adven-1.dat',0
+SavePath:	db	'/bin/adven-1.dat',0
 ;__________________________________________________________________________________________________
 ; Read/Write Data
 
