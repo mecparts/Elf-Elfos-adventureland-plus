@@ -59,10 +59,10 @@ O_TRUNC	equ	00000010b
 ; **************************************************
 ;
 date:	db	80h+7		; Month: July
-	db	20		; Day 20
+	db	21		; Day 21
 	dw	2021		; year = 2021
 ;
-build:	dw	3		; build number
+build:	dw	4		; build number
 	db	'@Copyleft 2021 Wayne Hortensius',0
 
 ;__________________________________________________________________________________________________
@@ -197,9 +197,22 @@ GRLoop1
 ; Main program starting point
 
 Exit
-	lbr	O_WRMBOOT
+	load	rf,saveStack	; restore Elf/OS's stack
+	lda	rf
+	phi	r2
+	ldn	rf
+	plo	r2
+	retn			; return to Elf/OS
 
 GameStart
+	load	rf,saveStack			; save Elf/OS's stack
+	ghi	r2
+	str	rf
+	inc	rf
+	glo	r2
+	str	rf
+	load	r2,localStack			; use our own stack
+
 	load	rf,splash
 	call	f_msg
 	call	f_read				; wait for key press
@@ -235,10 +248,10 @@ MainGetInput
 	; reload R9 to point to Endflag
 	load	r9,Endflag
 	ldn	R9
-	bnz	Exit			; quit if endflag != 0
+	lbnz	Exit			; quit if endflag != 0
 	dec	R9
 	ldn	R9
-	bnz	MainLoad			; loop back and re-load if loadflag != 0
+	lbnz	MainLoad			; loop back and re-load if loadflag != 0
 	; deal with lamp oil
 	load	ra,Array_IA+9
 	ldn	RA
@@ -571,9 +584,9 @@ GIParseLoop5Tail
 GIParseVerbOk
 	; validate second word (noun)
 	ldn	RB				; D is word[0][0]
-	bz	GIParseAllGood
+	lbz	GIParseAllGood
 	ldn	RC				; D is NV[1]
-	bnz	GIParseAllGood
+	lbnz	GIParseAllGood
 	load	rf,InputError3Msg
 	call	f_msg				; print "I don't know what a "
 	glo	RB
@@ -1216,7 +1229,7 @@ CLLoopCheck2
 	lbr	CLReturnFalse
 CLLoopCheck3
 	smi	1
-	bnz	CLLoopCheck4
+	lbnz	CLLoopCheck4
 	ldn	RB
 	SM
 	lbz	CLLoop1Tail
@@ -1387,7 +1400,7 @@ DACheck52Loop
 DACheck52Next
 	dec	R8
 	glo	R8
-	bnz	DACheck52Loop
+	lbnz	DACheck52Loop
 	glo	RC
 	smi	MX
 	lbnf	DACheck52TakeItem		; BL
@@ -1649,7 +1662,7 @@ DAAction66Loop1_1Done
 	glo	RC				; RC is current line length + item description length
 	adi	3
 	smi	MAXLINE
-	bl	DAAction66SkipLinefeed
+	lbnf	DAAction66SkipLinefeed		; BL
 	ldi	0
 	phi	RD				; linelen = 0
 	ldi	cr
@@ -2616,6 +2629,10 @@ Rand_VarB       DB		220
 Rand_VarC       DB		64
 
 PrintNumber     DB		0,0,0   ; temporary location for storing 2-digit number to print
+
+		ds	64
+localStack:	ds	1
+saveStack:	ds	2
 
 SaveFiledes:
 	db	0,0,0,0
