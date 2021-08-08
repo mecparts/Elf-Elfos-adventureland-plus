@@ -58,11 +58,9 @@ O_TRUNC	equ	00000010b
 ; build information, with build number and text.
 ; **************************************************
 ;
-date:	db	80h+7		; Month: July
-	db	21		; Day 21
-	dw	2021		; year = 2021
 ;
-build:	dw	4		; build number
+	date
+build:	dw	5		; build number
 	db	'@Copyleft 2021 Wayne Hortensius',0
 
 ;__________________________________________________________________________________________________
@@ -114,7 +112,7 @@ P2D_OnesDone
 
 ClearScreen
 	load	rf,ClsMsg
-	call	f_msg
+	call	O_MSG
 	retn
 
 ;__________________________________________________________________________________________________
@@ -214,13 +212,13 @@ GameStart
 	load	r2,localStack			; use our own stack
 
 	load	rf,splash
-	call	f_msg
-	call	f_read				; wait for key press
+	call	O_MSG
+	call	O_READKEY				; wait for key press
 	call	ClearScreen
 	; beginning of main() function
 	; Print welcome message
 	load	rf,StartingMsg
-	call	f_msg
+	call	O_MSG
 
 	; start of main loop
 MainLoad
@@ -263,7 +261,7 @@ MainGetInput
 	str	R9				; lamp_oil--
 	lbdf	LampNotEmpty
 	load	rf,LampEmptyMsg		; print Lamp is Empty message
-	call	f_msg
+	call	O_MSG
 	ldi	0
 	str	RA				; IA[9] = 0
 	br	MainNoLamp
@@ -271,14 +269,14 @@ LampNotEmpty
 	smi	25				; is our oil level < 25?
 	bdf	MainNoLamp
 	load	rf,LampLow1Msg		; print Lamp is low message
-	call	f_msg
+	call	O_MSG
 	load	rf,PrintNumber
 	ldn	R9				; D = lamp_oil
 	call	Print2Digit
 	load	rf,PrintNumber
-	call	f_msg
+	call	O_MSG
 	load	rf,LampLow2Msg
-	call	f_msg
+	call	O_MSG
 MainNoLamp
 	; NV[0] = 0
 	load	r9,Array_NV
@@ -327,7 +325,7 @@ GAV_FoundVar
 Do_GetInput
 	; print input prompt
 	load	rf,InputPromptMsg
-	call	f_msg
+	call	O_MSG
 	; now we are in the gets() function. set up loop variables
 	ldi	0
 	plo	RA				; RA.0 is character counter; only 79 are allowed
@@ -337,7 +335,7 @@ GILoop1
 	ghi	re
 	ani	0feh
 	phi	re
-	call	f_read
+	call	O_READKEY
 	phi	rf
 	ghi	re
 	ori	001h
@@ -353,11 +351,11 @@ GIBackspace
 	glo	RA				; if line length is 0
 	bz	GILoop1				; then just go back for another input character
 	ldi	bs				; otherwise, erase last character
-	call	f_type
+	call	O_TYPE
 	ldi	' '				; ' '
-	call	f_type
+	call	O_TYPE
 	ldi	bs				; '\b'
-	call	f_type
+	call	O_TYPE
 	dec	RA				; decrement character count
 	dec	R9				; decrement input line pointer
 	br	GILoop1				; and then go back for another input character
@@ -371,9 +369,9 @@ GILoop1N1
 	bnz	GILoop1N2
 GIEnter
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type
+	call	O_TYPE
 	br	GIgetsDone
 GILoop1N2
 	; ensure that input character is valid
@@ -399,7 +397,7 @@ GICharOk
 	str	R9				; add input character to our string
 	inc	R9
 	inc	RA				; increment string length counter
-	call	f_type				; echo character to serial output
+	call	O_TYPE				; echo character to serial output
 	glo	RA				; how long is the input line?
 	smi	79
 	bl	GIJumpLoop1		; if < 79 characters, go get another
@@ -571,14 +569,14 @@ GIParseLoop5Tail
 	lda	RC
 	lbnz	GIParseVerbOk
 	load	rf,InputError1Msg
-	call	f_msg			; print "I don't know how to "
+	call	O_MSG			; print "I don't know how to "
 	glo	RA
 	plo	RF
 	ghi	RA
 	phi	RF
-	call	f_msg			; print first word
+	call	O_MSG			; print first word
 	load	rf,InputError2Msg
-	call	f_msg			; print '!\r\n'
+	call	O_MSG			; print '!\r\n'
 	ldi	1
 	retn				; return 1
 GIParseVerbOk
@@ -588,14 +586,14 @@ GIParseVerbOk
 	ldn	RC				; D is NV[1]
 	lbnz	GIParseAllGood
 	load	rf,InputError3Msg
-	call	f_msg				; print "I don't know what a "
+	call	O_MSG				; print "I don't know what a "
 	glo	RB
 	plo	RF
 	ghi	RB
 	phi	RF
-	call	f_msg				; print second word
+	call	O_MSG				; print second word
 	load	rf,InputError4Msg
-	call	f_msg				; print " is!\n"
+	call	O_MSG				; print " is!\n"
 	ldi	1
 	retn				; return 1
 GIParseAllGood
@@ -611,7 +609,7 @@ GIParseAllGood
 
 Do_LoadGame
 	load	rf,LoadQestion
-	call	f_msg				; print "Load saved game (Y or N)?"
+	call	O_MSG				; print "Load saved game (Y or N)?"
 	call	Do_YesNo			; D = 0 if No, 1 if Yes
 	lbnz	LGNext1
 	retn					; return
@@ -624,8 +622,8 @@ LGNext1
 	lbnf	LoadOpened		; DF=0, file was opened
 LoadFailed:
 	load	rf,LoadFailedMsg
-	call	f_msg
-	call	f_read			; wait for key press
+	call	O_MSG
+	call	O_READKEY			; wait for key press
 	retn
 ;
 LoadOpened:
@@ -661,7 +659,7 @@ Do_Look
 	bz	LKNotDark
 	; it's dark. print a message and return
 	load	rf,Look1Msg
-	call	f_msg
+	call	O_MSG
 	retn
 LKNotDark
 	ldn	R9
@@ -680,13 +678,13 @@ LKNotDark
 	bz	LKPrintRoom1
 	dec	RB
 	load	rf,Look2Msg			; print "I'm in a " prefix
-	call	f_msg
+	call	O_MSG
 LKPrintRoom1
 	glo	RB
 	plo	Rf
 	ghi	RB
 	phi	Rf
-	call	f_msg				; print the room description
+	call	O_MSG				; print the room description
 	ldi	0
 	plo	RB				; RB.0 is item counter 'i' for loop
 	phi	RB				; RB.1 is flag which specifies whether item list prefix has been printed
@@ -702,7 +700,7 @@ LKLoop1
 	ldi	1
 	phi	RB
 	load	rf,Look3Msg
-	call	f_msg				; print: "Visible Items Here:"
+	call	O_MSG				; print: "Visible Items Here:"
 LKLoop1Next1
 	; print item description
 	glo	RB				; D = item number (i)
@@ -717,24 +715,24 @@ LKLoop1Next1
 	lda	R8
 	plo	RC				; RC = pointer to item description
 	ldi	' '
-	call	f_type
+	call	O_TYPE
 	ldi	' '
-	call	f_type
+	call	O_TYPE
 	ldi	' '
-	call	f_type
+	call	O_TYPE
 LKLoop1_1
 	ldn	RC
 	bz	LKLoop1_1Tail
 	smi	'/'
 	bz	LKLoop1_1Tail
 	lda	RC
-	call	f_type
+	call	O_TYPE
 	br	LKLoop1_1
 LKLoop1_1Tail
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type
+	call	O_TYPE
 LKLoop1Tail
 	inc	RB
 	glo	RB
@@ -763,7 +761,7 @@ LKLoop2
 	ldi	1
 	phi	RB
 	load	rf,Look4Msg
-	call	f_msg
+	call	O_MSG
 LKLoop2Next1
 	glo	RB
 	SHL
@@ -774,20 +772,20 @@ LKLoop2Next1
 	ldi	HIGH Array_DIR
 	adci	0
 	phi	RF
-	call	f_msg				; print direction
+	call	O_MSG				; print direction
 	ldi	' '
-	call	f_type
+	call	O_TYPE
 LKLoop2Tail
 	inc	RB
 	glo	RB
 	smi	6
 	lbnf	LKLoop2			; BL
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type
+	call	O_TYPE
 	retn
 
 ;__________________________________________________________________________________________________
@@ -808,7 +806,7 @@ Do_Turn
 	ldn	R7
 	bnz	TUHaveNoun
 	load	rf,Turn1Msg
-	call	f_msg				; print "Where do you want me to go? Give me a direction too.\n"
+	call	O_MSG				; print "Where do you want me to go? Give me a direction too.\n"
 	retn					; return
 TUHaveNoun
 	smi	007H
@@ -840,7 +838,7 @@ TUHaveDirection
 	; it's dark. print a message
 	inc	R9				; i = 1
 	load	rf,Turn2Msg
-	call	f_msg				; print: "Warning: it's dangerous to move in the dark!\n"
+	call	O_MSG				; print: "Warning: it's dangerous to move in the dark!\n"
 	sex	RA
 TUNotDark
 	ghi	R9
@@ -862,11 +860,11 @@ TUNotDark
 	glo	R9
 	bnz	TUBlockedAndDark
 	load	rf,Turn3Msg
-	call	f_msg				; print: "I can't go in that direction.\n"
+	call	O_MSG				; print: "I can't go in that direction.\n"
 	retn				; return
 TUBlockedAndDark
 	load	rf,Turn4Msg
-	call	f_msg				; print: "I fell down and broke my neck.\n"
+	call	O_MSG				; print: "I fell down and broke my neck.\n"
 	ldi	RL-1
 	phi	R9				; j = RL-1
 	dec	RA
@@ -1002,7 +1000,7 @@ TUCommandWasFound
 	bnz	TUDone
 	load	rf,Turn6Msg
 TUPrintAndReturn
-	call	f_msg				; print: "I can't do that yet."
+	call	O_MSG				; print: "I can't do that yet."
 TUDone
 	retn
 
@@ -1047,7 +1045,7 @@ CDLoop1Tail
 	SM					; DF/D = items - MX
 	bl	CDNotTake
 	load	rf,CarryDrop2Msg
-	call	f_msg				; print: "I can't. I'm carrying too much!"
+	call	O_MSG				; print: "I can't. I'm carrying too much!"
 	retn					; return
 CDNotTake
 	ldi	IL
@@ -1156,7 +1154,7 @@ CDDropItem
 	load	rf,CarryDrop5Msg		; print: "OK, dropped."
 
 CDPrintAndReturn
-	call	f_msg
+	call	O_MSG
 	retn
 
 ;__________________________________________________________________________________________________
@@ -1378,11 +1376,11 @@ DAPrintMessage
 	phi	Rf
 	ldn	R7
 	plo	Rf				; RF points to message to print
-	call	f_msg
+	call	O_MSG
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type				; print '\r\n'
+	call	O_TYPE				; print '\r\n'
 	ldi	0
 	retn					; return false (action didn't fail)
 DACheck52
@@ -1405,7 +1403,7 @@ DACheck52Next
 	smi	MX
 	lbnf	DACheck52TakeItem		; BL
 	load	rf,CarryDrop2Msg
-	call	f_msg				; print: "I can't. I'm carrying too much!"
+	call	O_MSG				; print: "I can't. I'm carrying too much!"
 	ldi	1
 	retn					; return true
 DACheck52TakeItem
@@ -1533,7 +1531,7 @@ DACheck61
 	ldi	RL-1
 	str	R7				; room = RL-1;
 	load	rf,Action1Msg
-	call	f_msg				; print: "I'm dead..."
+	call	O_MSG				; print: "I'm dead..."
 	LBR	DADoLook			; look()
 DACheck62
 	smi	1
@@ -1551,7 +1549,7 @@ DACheck63
 	smi	1
 	LBNZ	DACheck64
 	load	rf,Action2Msg
-	call	f_msg				; print "The game is now over.\nAnother game? "
+	call	O_MSG				; print "The game is now over.\nAnother game? "
 	call	Do_YesNo			; D = 0 if No, 1 if Yes
 	SDI	LOW Endflag
 	plo	RC
@@ -1604,12 +1602,12 @@ DAAction65LoopTail
 	ldn	RD
 	call	Print2Digit			; convert # of treasures to 2-digit number
 	load	rf,Action3_1Msg
-	call	f_msg				; print "I've stored XX treasures.  On a scale of 0 to 99, that rates a XX."
+	call	O_MSG				; print "I've stored XX treasures.  On a scale of 0 to 99, that rates a XX."
 	ghi	RC
 	smi	TT
 	lbnz	DAReturnFalse2			; continue if not a perfect score
 	load	rf,Action4Msg
-	call	f_msg				; print "Congratulations! You scored a Perfect Game!\r\nThe game is now over.\r\nAnother game? "
+	call	O_MSG				; print "Congratulations! You scored a Perfect Game!\r\nThe game is now over.\r\nAnother game? "
 	call	Do_YesNo			; D = 0 if No, 1 if Yes
 	SDI	LOW Endflag
 	plo	RC
@@ -1627,7 +1625,7 @@ DACheck66
 	plo	RC				; RC.0 = line length
 	phi	RC				; RC.1 = not empty flag
 	load	rf,Action5Msg
-	call	f_msg				; print "I'm carrying:\n"
+	call	O_MSG				; print "I'm carrying:\n"
 	load	r1,Table_IAS
 	ldi	0
 	plo	RD				; RD.0 = item index
@@ -1666,9 +1664,9 @@ DAAction66Loop1_1Done
 	ldi	0
 	phi	RD				; linelen = 0
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type				; print "\r\n"
+	call	O_TYPE				; print "\r\n"
 DAAction66SkipLinefeed
 	ghi	RD
 	plo	RC				; restore original line length value
@@ -1685,13 +1683,13 @@ DAAction66Loop1_2			; print the item description
 	lbz	DAAction66Loop1_2Done
 	inc	RC				; increment line length
 	adi	'/'
-	call	f_type				; print one character
+	call	O_TYPE				; print one character
 	lbr	DAAction66Loop1_2
 DAAction66Loop1_2Done
 	ldi	'.'
-	call	f_type
+	call	O_TYPE
 	ldi	' '
-	call	f_type				; print ". "
+	call	O_TYPE				; print ". "
 	inc	RC
 	inc	RC				; linelen += 2
 DAAction66Loop1Tail
@@ -1702,10 +1700,10 @@ DAAction66Loop1Tail
 	ghi	RC
 	LBNZ	DAAction66NotEmpty
 	load	rf,Action6Msg
-	call	f_msg				; print "Nothing!"
+	call	O_MSG				; print "Nothing!"
 DAAction66NotEmpty
 	load	rf,NewlineMsg			; print "\r\n"
-	call	f_msg
+	call	O_MSG
 	lbr	DAReturnFalse3
 DACheck67
 	smi	1
@@ -1743,7 +1741,7 @@ DACheck71
 	lbnz	DACheck72
 	call	Do_SaveGame			; call SaveGame function
 	load	rf,Action7Msg
-	call	f_msg				; print "Game state has been saved in upper memory."
+	call	O_MSG				; print "Game state has been saved in upper memory."
 	lbr	DAReturnFalse3
 DACheck72
 	smi	1
@@ -1813,7 +1811,7 @@ Do_YesNo
 	ghi	re
 	ani	0feh
 	phi	re
-	call	f_read
+	call	O_READKEY
 	phi	rf
 	ghi	re
 	ori	001h
@@ -1832,20 +1830,20 @@ Do_YesNo
 	lbr	Do_YesNo
 YN_No
 	ghi	RF
-	call	f_type
+	call	O_TYPE
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type				; print 'n\r\n'
+	call	O_TYPE				; print 'n\r\n'
 	ldi	0
 	retn					; return 0
 YN_Yes
 	ghi	RF
-	call	f_type
+	call	O_TYPE
 	ldi	cr
-	call	f_type
+	call	O_TYPE
 	ldi	lf
-	call	f_type				; print 'y\r\n'
+	call	O_TYPE				; print 'y\r\n'
 	ldi	1
 	retn					; return 1
 
@@ -1863,7 +1861,7 @@ Do_SaveGame:
 	plo	r7
 	call	O_OPEN			; attempt to open file
 	lbnf	SaveOpened		; DF=0, file was opened
-	call	f_inmsg
+	call	O_INMSG
 	db	'Save file could not be created.',cr,lf,0
 	retn
 ;
@@ -1878,7 +1876,7 @@ CloseSaveFile:
 	call	O_CLOSE			; close the image file
 	retn
 WriteError:
-	call	f_inmsg
+	call	O_INMSG
 	db	'Game state could not be saved.',cr,lf,0
 	br	CloseSaveFile
 ;

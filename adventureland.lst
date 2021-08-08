@@ -40,6 +40,7 @@
                         b_devUART	equ	00001000b	; UART
                         b_devRTC	equ	00010000b	; RTC
                         b_devNVR	equ	00100000b	; NVRAM
+                        b_devNBREAD	equ	00000001b	; NBREAD supported
                         
                         #ifndef _IS_BIOS
                         
@@ -96,6 +97,7 @@
                         f_idnum		equ	(BIOS+7bh)	; determine type of ascii number
                         f_isterm	equ	(BIOS+7eh)	; determine if D is a termination char
                         f_getdev	equ	(BIOS+81h)	; get supported devices
+                        f_nbread	equ	(BIOS+84);	; read 1 char from console (non blocking)
                         
                         f_version	equ	(BIOS+0f9h)	; 3 bytes holding bios version number
                         
@@ -124,6 +126,25 @@
                         #endif
                         
                         	incl	"kernel.inc"
+                        O_CREAT	equ	00000001b
+                        O_TRUNC	equ	00000010b
+                        O_APPND	equ	00000100b
+                        ;
+                        errexists	   equ	1
+                        errnoffnd	   equ	2
+                        errinvdir	   equ	3
+                        errisdir	      equ	4
+                        errdirnotempty	equ	5
+                        errnotexec	   equ	6
+                        ;
+                        ff_dir		   equ	00000001b
+                        ff_exec		   equ	00000010b
+                        ff_write	      equ	00000100b
+                        ff_hide		   equ	00001000b
+                        ff_archive	   equ	00010000b
+                        
+                        #ifndef _IS_KERNEL
+                        
                         O_CLDBOOT: equ     0300h               ; jump to cold boot routine
                         O_WRMBOOT: equ     0303h               ; jump to warm boot routine
                         O_OPEN:    equ     0306h               ; open a file
@@ -155,14 +176,18 @@
                         O_SETTOD:  equ     0354h               ; passthrough to f_settod
                         O_INPUTL:  equ     0357h               ; passthrough to f_inputl
                         O_BOOT:    equ     035ah               ; passthrough to f_boot
-                        O_TTY:     equ     035dh               ; passthrough to f_tty
+                        O_TTY:     equ     035dh
                         O_SETBD:   equ     0360h               ; passthrough to f_setbd
                         O_INITCALL: equ    0363h               ; passthrough to f_initcall
                         O_BRKTEST: equ     0366h               ; passthrough to f_brktest
-                        O_DEVCTRL: equ     0369h               ; passthrough to deverr
+                        O_DEVCTRL: equ     0369h               ; Hook for device control drivers
                         O_ALLOC:   equ     036ch               ; passthrough to alloc
                         O_DEALLOC: equ     036fh               ; passthrough to dealloc
+                        O_TERMCTRL: equ    0372h               ; Hook for terminal control drivers
+                        O_MEMCTRL: equ     0375h               ; Hook for memory control drivers
+                        ;
                         I_SERVE:   equ     03f6h               ; address of interrupt chain head
+                        ;
                         V_IVEC:    equ     03fdh               ; interrupt head
                         V_DVEC:    equ     036ah               ; device head
                         K_VER:     equ     0400h               ; kernel version number
@@ -171,7 +196,9 @@
                         K_BDAY:    equ     0406h               ; kernel build day
                         K_BYEAR:   equ     0407h               ; kernel build month
                         K_HIMEM:   equ     0442h               ; high memory pointer
-                        K_HEAP:    equ     044dh               ; heap pointer
+                        K_LOWMEM:  equ     0465h               ; lowest memory heap can use
+                        K_RETVAL:  equ     0467h               ; D on program exit
+                        K_HEAP:    equ     0468h               ; heap pointer
                         K_CLKFREQ: equ     0470h               ; system clock frequency
                         K_MONTH:   equ     0475h               ; date/time
                         K_DAY:     equ     0476h
@@ -182,19 +209,13 @@
                         K_SECDEN:  equ     047bh
                         K_SECNUM:  equ     047dh
                         ;
-                        ;O_HIMEM:   equ     0442h               ; himem value
-                        O_DATTIM:  equ     0475h               ; date/time block
-                        ;
-                        errexists: equ     1
-                        errnoffnd: equ     2
-                        errinvdir: equ     3
-                        errisdir:  equ     4
-                        errdirnotempty: equ   5
-                        errnotexec:     equ   6
-                        ;
-                        O_CREAT	equ	00000001b
-                        O_TRUNC	equ	00000010b
-                        O_APPND	equ	00000100b
+                        D_IDERESET equ     0444h               ; jump to bios ide reset
+                        D_IDEREAD  equ     0447h               ; jump to bios ide read
+                        D_IDEWRITE equ     044ah               ; jump to bios ide write
+                        D_REAPHEAP equ     044dh               ; passthrough to heapreaper
+                        D_PROGEND  equ     0450h
+                        
+                        #endif
                         
                         ;
                         bs	equ	8
@@ -229,11 +250,9 @@
                         ; build information, with build number and text.
                         ; **************************************************
                         ;
-   2002   87            date:	db	80h+7		; Month: July
-   2003   15            	db	21		; Day 21
-   2004   07 e5         	dw	2021		; year = 2021
                         ;
-   2006   00 04         build:	dw	4		; build number
+   2002   88 07 07 e5   	date
+   2006   00 05         build:	dw	5		; build number
    2008   40 43 6f 70   	db	'@Copyleft 2021 Wayne Hortensius',0
    200c   79 6c 65 66   
    2010   74 20 32 30   
@@ -293,7 +312,7 @@
                         ClearScreen
    204e   f8 2b bf f8   	load	rf,ClsMsg
    2052   bf af         
-   2054   d4 ff 09      	call	f_msg
+   2054   d4 03 33      	call	O_MSG
    2057   d5            	retn
                         
                         ;__________________________________________________________________________________________________
@@ -400,14 +419,14 @@
                         
    20c1   f8 64 bf f8   	load	rf,splash
    20c5   14 af         
-   20c7   d4 ff 09      	call	f_msg
-   20ca   d4 ff 06      	call	f_read				; wait for key press
+   20c7   d4 03 33      	call	O_MSG
+   20ca   d4 03 36      	call	O_READKEY				; wait for key press
    20cd   d4 20 4e      	call	ClearScreen
                         	; beginning of main() function
                         	; Print welcome message
    20d0   f8 2b bf f8   	load	rf,StartingMsg
    20d4   ce af         
-   20d6   d4 ff 09      	call	f_msg
+   20d6   d4 03 33      	call	O_MSG
                         
                         	; start of main loop
                         MainLoad
@@ -455,7 +474,7 @@
    211e   c3 21 2f      	lbdf	LampNotEmpty
    2121   f8 2c bf f8   	load	rf,LampEmptyMsg		; print Lamp is Empty message
    2125   c5 af         
-   2127   d4 ff 09      	call	f_msg
+   2127   d4 03 33      	call	O_MSG
    212a   f8 00         	ldi	0
    212c   5a            	str	RA				; IA[9] = 0
    212d   30 58         	br	MainNoLamp
@@ -464,17 +483,17 @@
    2131   33 58         	bdf	MainNoLamp
    2133   f8 2c bf f8   	load	rf,LampLow1Msg		; print Lamp is low message
    2137   ee af         
-   2139   d4 ff 09      	call	f_msg
+   2139   d4 03 33      	call	O_MSG
    213c   f8 73 bf f8   	load	rf,PrintNumber
    2140   77 af         
    2142   09            	ldn	R9				; D = lamp_oil
    2143   d4 20 28      	call	Print2Digit
    2146   f8 73 bf f8   	load	rf,PrintNumber
    214a   77 af         
-   214c   d4 ff 09      	call	f_msg
+   214c   d4 03 33      	call	O_MSG
    214f   f8 2d bf f8   	load	rf,LampLow2Msg
    2153   15 af         
-   2155   d4 ff 09      	call	f_msg
+   2155   d4 03 33      	call	O_MSG
                         MainNoLamp
                         	; NV[0] = 0
    2158   f8 73 b9 f8   	load	r9,Array_NV
@@ -526,7 +545,7 @@
                         	; print input prompt
    2182   f8 2d bf f8   	load	rf,InputPromptMsg
    2186   23 af         
-   2188   d4 ff 09      	call	f_msg
+   2188   d4 03 33      	call	O_MSG
                         	; now we are in the gets() function. set up loop variables
    218b   f8 00         	ldi	0
    218d   aa            	plo	RA				; RA.0 is character counter; only 79 are allowed
@@ -537,7 +556,7 @@
    2194   9e            	ghi	re
    2195   fa fe         	ani	0feh
    2197   be            	phi	re
-   2198   d4 ff 06      	call	f_read
+   2198   d4 03 36      	call	O_READKEY
    219b   bf            	phi	rf
    219c   9e            	ghi	re
    219d   f9 01         	ori	001h
@@ -553,11 +572,11 @@
    21aa   8a            	glo	RA				; if line length is 0
    21ab   32 94         	bz	GILoop1				; then just go back for another input character
    21ad   f8 08         	ldi	bs				; otherwise, erase last character
-   21af   d4 ff 03      	call	f_type
+   21af   d4 03 30      	call	O_TYPE
    21b2   f8 20         	ldi	' '				; ' '
-   21b4   d4 ff 03      	call	f_type
+   21b4   d4 03 30      	call	O_TYPE
    21b7   f8 08         	ldi	bs				; '\b'
-   21b9   d4 ff 03      	call	f_type
+   21b9   d4 03 30      	call	O_TYPE
    21bc   2a            	dec	RA				; decrement character count
    21bd   29            	dec	R9				; decrement input line pointer
    21be   30 94         	br	GILoop1				; and then go back for another input character
@@ -571,9 +590,9 @@
    21c9   3a d7         	bnz	GILoop1N2
                         GIEnter
    21cb   f8 0d         	ldi	cr
-   21cd   d4 ff 03      	call	f_type
+   21cd   d4 03 30      	call	O_TYPE
    21d0   f8 0a         	ldi	lf
-   21d2   d4 ff 03      	call	f_type
+   21d2   d4 03 30      	call	O_TYPE
    21d5   30 ff         	br	GIgetsDone
                         GILoop1N2
                         	; ensure that input character is valid
@@ -599,7 +618,7 @@
    21f4   59            	str	R9				; add input character to our string
    21f5   19            	inc	R9
    21f6   1a            	inc	RA				; increment string length counter
-   21f7   d4 ff 03      	call	f_type				; echo character to serial output
+   21f7   d4 03 30      	call	O_TYPE				; echo character to serial output
    21fa   8a            	glo	RA				; how long is the input line?
    21fb   ff 4f         	smi	79
    21fd   3b f0         	bl	GIJumpLoop1		; if < 79 characters, go get another
@@ -776,15 +795,15 @@
    22ca   ca 22 e9      	lbnz	GIParseVerbOk
    22cd   f8 2d bf f8   	load	rf,InputError1Msg
    22d1   43 af         
-   22d3   d4 ff 09      	call	f_msg			; print "I don't know how to "
+   22d3   d4 03 33      	call	O_MSG			; print "I don't know how to "
    22d6   8a            	glo	RA
    22d7   af            	plo	RF
    22d8   9a            	ghi	RA
    22d9   bf            	phi	RF
-   22da   d4 ff 09      	call	f_msg			; print first word
+   22da   d4 03 33      	call	O_MSG			; print first word
    22dd   f8 2d bf f8   	load	rf,InputError2Msg
    22e1   5c af         
-   22e3   d4 ff 09      	call	f_msg			; print '!\r\n'
+   22e3   d4 03 33      	call	O_MSG			; print '!\r\n'
    22e6   f8 01         	ldi	1
    22e8   d5            	retn				; return 1
                         GIParseVerbOk
@@ -795,15 +814,15 @@
    22ee   ca 23 0d      	lbnz	GIParseAllGood
    22f1   f8 2d bf f8   	load	rf,InputError3Msg
    22f5   64 af         
-   22f7   d4 ff 09      	call	f_msg				; print "I don't know what a "
+   22f7   d4 03 33      	call	O_MSG				; print "I don't know what a "
    22fa   8b            	glo	RB
    22fb   af            	plo	RF
    22fc   9b            	ghi	RB
    22fd   bf            	phi	RF
-   22fe   d4 ff 09      	call	f_msg				; print second word
+   22fe   d4 03 33      	call	O_MSG				; print second word
    2301   f8 2d bf f8   	load	rf,InputError4Msg
    2305   7d af         
-   2307   d4 ff 09      	call	f_msg				; print " is!\n"
+   2307   d4 03 33      	call	O_MSG				; print " is!\n"
    230a   f8 01         	ldi	1
    230c   d5            	retn				; return 1
                         GIParseAllGood
@@ -820,7 +839,7 @@
                         Do_LoadGame
    2310   f8 2c bf f8   	load	rf,LoadQestion
    2314   49 af         
-   2316   d4 ff 09      	call	f_msg				; print "Load saved game (Y or N)?"
+   2316   d4 03 33      	call	O_MSG				; print "Load saved game (Y or N)?"
    2319   d4 2a ee      	call	Do_YesNo			; D = 0 if No, 1 if Yes
    231c   ca 23 20      	lbnz	LGNext1
    231f   d5            	retn					; return
@@ -836,8 +855,8 @@
                         LoadFailed:
    2335   f8 2c bf f8   	load	rf,LoadFailedMsg
    2339   6f af         
-   233b   d4 ff 09      	call	f_msg
-   233e   d4 ff 06      	call	f_read			; wait for key press
+   233b   d4 03 33      	call	O_MSG
+   233e   d4 03 36      	call	O_READKEY			; wait for key press
    2341   d5            	retn
                         ;
                         LoadOpened:
@@ -880,7 +899,7 @@
                         	; it's dark. print a message and return
    237f   f8 2d bf f8   	load	rf,Look1Msg
    2383   88 af         
-   2385   d4 ff 09      	call	f_msg
+   2385   d4 03 33      	call	O_MSG
    2388   d5            	retn
                         LKNotDark
    2389   09            	ldn	R9
@@ -900,13 +919,13 @@
    239c   2b            	dec	RB
    239d   f8 2d bf f8   	load	rf,Look2Msg			; print "I'm in a " prefix
    23a1   b2 af         
-   23a3   d4 ff 09      	call	f_msg
+   23a3   d4 03 33      	call	O_MSG
                         LKPrintRoom1
    23a6   8b            	glo	RB
    23a7   af            	plo	Rf
    23a8   9b            	ghi	RB
    23a9   bf            	phi	Rf
-   23aa   d4 ff 09      	call	f_msg				; print the room description
+   23aa   d4 03 33      	call	O_MSG				; print the room description
    23ad   f8 00         	ldi	0
    23af   ab            	plo	RB				; RB.0 is item counter 'i' for loop
    23b0   bb            	phi	RB				; RB.1 is flag which specifies whether item list prefix has been printed
@@ -924,7 +943,7 @@
    23c2   bb            	phi	RB
    23c3   f8 2d bf f8   	load	rf,Look3Msg
    23c7   bc af         
-   23c9   d4 ff 09      	call	f_msg				; print: "Visible Items Here:"
+   23c9   d4 03 33      	call	O_MSG				; print: "Visible Items Here:"
                         LKLoop1Next1
                         	; print item description
    23cc   8b            	glo	RB				; D = item number (i)
@@ -939,24 +958,24 @@
    23d8   48            	lda	R8
    23d9   ac            	plo	RC				; RC = pointer to item description
    23da   f8 20         	ldi	' '
-   23dc   d4 ff 03      	call	f_type
+   23dc   d4 03 30      	call	O_TYPE
    23df   f8 20         	ldi	' '
-   23e1   d4 ff 03      	call	f_type
+   23e1   d4 03 30      	call	O_TYPE
    23e4   f8 20         	ldi	' '
-   23e6   d4 ff 03      	call	f_type
+   23e6   d4 03 30      	call	O_TYPE
                         LKLoop1_1
    23e9   0c            	ldn	RC
    23ea   32 f6         	bz	LKLoop1_1Tail
    23ec   ff 2f         	smi	'/'
    23ee   32 f6         	bz	LKLoop1_1Tail
    23f0   4c            	lda	RC
-   23f1   d4 ff 03      	call	f_type
+   23f1   d4 03 30      	call	O_TYPE
    23f4   30 e9         	br	LKLoop1_1
                         LKLoop1_1Tail
    23f6   f8 0d         	ldi	cr
-   23f8   d4 ff 03      	call	f_type
+   23f8   d4 03 30      	call	O_TYPE
    23fb   f8 0a         	ldi	lf
-   23fd   d4 ff 03      	call	f_type
+   23fd   d4 03 30      	call	O_TYPE
                         LKLoop1Tail
    2400   1b            	inc	RB
    2401   8b            	glo	RB
@@ -986,7 +1005,7 @@
    2422   bb            	phi	RB
    2423   f8 2d bf f8   	load	rf,Look4Msg
    2427   e0 af         
-   2429   d4 ff 09      	call	f_msg
+   2429   d4 03 33      	call	O_MSG
                         LKLoop2Next1
    242c   8b            	glo	RB
    242d   fe            	SHL
@@ -997,20 +1016,20 @@
    2433   f8 3c         	ldi	HIGH Array_DIR
    2435   7c 00         	adci	0
    2437   bf            	phi	RF
-   2438   d4 ff 09      	call	f_msg				; print direction
+   2438   d4 03 33      	call	O_MSG				; print direction
    243b   f8 20         	ldi	' '
-   243d   d4 ff 03      	call	f_type
+   243d   d4 03 30      	call	O_TYPE
                         LKLoop2Tail
    2440   1b            	inc	RB
    2441   8b            	glo	RB
    2442   ff 06         	smi	6
    2444   cb 24 18      	lbnf	LKLoop2			; BL
    2447   f8 0d         	ldi	cr
-   2449   d4 ff 03      	call	f_type
+   2449   d4 03 30      	call	O_TYPE
    244c   f8 0a         	ldi	lf
-   244e   d4 ff 03      	call	f_type
+   244e   d4 03 30      	call	O_TYPE
    2451   f8 0a         	ldi	lf
-   2453   d4 ff 03      	call	f_type
+   2453   d4 03 30      	call	O_TYPE
    2456   d5            	retn
                         
                         ;__________________________________________________________________________________________________
@@ -1033,7 +1052,7 @@
    2467   3a 73         	bnz	TUHaveNoun
    2469   f8 2e bf f8   	load	rf,Turn1Msg
    246d   01 af         
-   246f   d4 ff 09      	call	f_msg				; print "Where do you want me to go? Give me a direction too.\n"
+   246f   d4 03 33      	call	O_MSG				; print "Where do you want me to go? Give me a direction too.\n"
    2472   d5            	retn					; return
                         TUHaveNoun
    2473   ff 07         	smi	007H
@@ -1068,7 +1087,7 @@
    24a3   19            	inc	R9				; i = 1
    24a4   f8 2e bf f8   	load	rf,Turn2Msg
    24a8   41 af         
-   24aa   d4 ff 09      	call	f_msg				; print: "Warning: it's dangerous to move in the dark!\n"
+   24aa   d4 03 33      	call	O_MSG				; print: "Warning: it's dangerous to move in the dark!\n"
    24ad   ea            	sex	RA
                         TUNotDark
    24ae   99            	ghi	R9
@@ -1091,12 +1110,12 @@
    24c4   3a d0         	bnz	TUBlockedAndDark
    24c6   f8 2e bf f8   	load	rf,Turn3Msg
    24ca   7b af         
-   24cc   d4 ff 09      	call	f_msg				; print: "I can't go in that direction.\n"
+   24cc   d4 03 33      	call	O_MSG				; print: "I can't go in that direction.\n"
    24cf   d5            	retn				; return
                         TUBlockedAndDark
    24d0   f8 2e bf f8   	load	rf,Turn4Msg
    24d4   a4 af         
-   24d6   d4 ff 09      	call	f_msg				; print: "I fell down and broke my neck.\n"
+   24d6   d4 03 33      	call	O_MSG				; print: "I fell down and broke my neck.\n"
    24d9   f8 21         	ldi	RL-1
    24db   b9            	phi	R9				; j = RL-1
    24dc   2a            	dec	RA
@@ -1239,7 +1258,7 @@
    25a7   f8 2e bf f8   	load	rf,Turn6Msg
    25ab   fc af         
                         TUPrintAndReturn
-   25ad   d4 ff 09      	call	f_msg				; print: "I can't do that yet."
+   25ad   d4 03 33      	call	O_MSG				; print: "I can't do that yet."
                         TUDone
    25b0   d5            	retn
                         
@@ -1288,7 +1307,7 @@
    25ea   3b f6         	bl	CDNotTake
    25ec   f8 2f bf f8   	load	rf,CarryDrop2Msg
    25f0   2c af         
-   25f2   d4 ff 09      	call	f_msg				; print: "I can't. I'm carrying too much!"
+   25f2   d4 03 33      	call	O_MSG				; print: "I can't. I'm carrying too much!"
    25f5   d5            	retn					; return
                         CDNotTake
    25f6   f8 3d         	ldi	IL
@@ -1404,7 +1423,7 @@
    269c   8c af         
                         
                         CDPrintAndReturn
-   269e   d4 ff 09      	call	f_msg
+   269e   d4 03 33      	call	O_MSG
    26a1   d5            	retn
                         
                         ;__________________________________________________________________________________________________
@@ -1629,11 +1648,11 @@
    27db   bf            	phi	Rf
    27dc   07            	ldn	R7
    27dd   af            	plo	Rf				; RF points to message to print
-   27de   d4 ff 09      	call	f_msg
+   27de   d4 03 33      	call	O_MSG
    27e1   f8 0d         	ldi	cr
-   27e3   d4 ff 03      	call	f_type
+   27e3   d4 03 30      	call	O_TYPE
    27e6   f8 0a         	ldi	lf
-   27e8   d4 ff 03      	call	f_type				; print '\r\n'
+   27e8   d4 03 30      	call	O_TYPE				; print '\r\n'
    27eb   f8 00         	ldi	0
    27ed   d5            	retn					; return false (action didn't fail)
                         DACheck52
@@ -1658,7 +1677,7 @@
    280b   cb 28 1a      	lbnf	DACheck52TakeItem		; BL
    280e   f8 2f bf f8   	load	rf,CarryDrop2Msg
    2812   2c af         
-   2814   d4 ff 09      	call	f_msg				; print: "I can't. I'm carrying too much!"
+   2814   d4 03 33      	call	O_MSG				; print: "I can't. I'm carrying too much!"
    2817   f8 01         	ldi	1
    2819   d5            	retn					; return true
                         DACheck52TakeItem
@@ -1794,7 +1813,7 @@
    28fb   57            	str	R7				; room = RL-1;
    28fc   f8 2f bf f8   	load	rf,Action1Msg
    2900   ef af         
-   2902   d4 ff 09      	call	f_msg				; print: "I'm dead..."
+   2902   d4 03 33      	call	O_MSG				; print: "I'm dead..."
    2905   c0 2a cf      	LBR	DADoLook			; look()
                         DACheck62
    2908   ff 01         	smi	1
@@ -1813,7 +1832,7 @@
    2921   ca 29 3e      	LBNZ	DACheck64
    2924   f8 30 bf f8   	load	rf,Action2Msg
    2928   08 af         
-   292a   d4 ff 09      	call	f_msg				; print "The game is now over.\nAnother game? "
+   292a   d4 03 33      	call	O_MSG				; print "The game is now over.\nAnother game? "
    292d   d4 2a ee      	call	Do_YesNo			; D = 0 if No, 1 if Yes
    2930   fd 6d         	SDI	LOW Endflag
    2932   ac            	plo	RC
@@ -1871,13 +1890,13 @@
    298c   d4 20 28      	call	Print2Digit			; convert # of treasures to 2-digit number
    298f   f8 30 bf f8   	load	rf,Action3_1Msg
    2993   3d af         
-   2995   d4 ff 09      	call	f_msg				; print "I've stored XX treasures.  On a scale of 0 to 99, that rates a XX."
+   2995   d4 03 33      	call	O_MSG				; print "I've stored XX treasures.  On a scale of 0 to 99, that rates a XX."
    2998   9c            	ghi	RC
    2999   ff 0d         	smi	TT
    299b   ca 29 b5      	lbnz	DAReturnFalse2			; continue if not a perfect score
    299e   f8 30 bf f8   	load	rf,Action4Msg
    29a2   95 af         
-   29a4   d4 ff 09      	call	f_msg				; print "Congratulations! You scored a Perfect Game!\r\nThe game is now over.\r\nAnother game? "
+   29a4   d4 03 33      	call	O_MSG				; print "Congratulations! You scored a Perfect Game!\r\nThe game is now over.\r\nAnother game? "
    29a7   d4 2a ee      	call	Do_YesNo			; D = 0 if No, 1 if Yes
    29aa   fd 6d         	SDI	LOW Endflag
    29ac   ac            	plo	RC
@@ -1896,7 +1915,7 @@
    29be   bc            	phi	RC				; RC.1 = not empty flag
    29bf   f8 31 bf f8   	load	rf,Action5Msg
    29c3   47 af         
-   29c5   d4 ff 09      	call	f_msg				; print "I'm carrying:\n"
+   29c5   d4 03 33      	call	O_MSG				; print "I'm carrying:\n"
    29c8   f8 5c b1 f8   	load	r1,Table_IAS
    29cc   1a a1         
    29ce   f8 00         	ldi	0
@@ -1936,9 +1955,9 @@
    29ff   f8 00         	ldi	0
    2a01   bd            	phi	RD				; linelen = 0
    2a02   f8 0d         	ldi	cr
-   2a04   d4 ff 03      	call	f_type
+   2a04   d4 03 30      	call	O_TYPE
    2a07   f8 0a         	ldi	lf
-   2a09   d4 ff 03      	call	f_type				; print "\r\n"
+   2a09   d4 03 30      	call	O_TYPE				; print "\r\n"
                         DAAction66SkipLinefeed
    2a0c   9d            	ghi	RD
    2a0d   ac            	plo	RC				; restore original line length value
@@ -1955,13 +1974,13 @@
    2a1a   c2 2a 26      	lbz	DAAction66Loop1_2Done
    2a1d   1c            	inc	RC				; increment line length
    2a1e   fc 2f         	adi	'/'
-   2a20   d4 ff 03      	call	f_type				; print one character
+   2a20   d4 03 30      	call	O_TYPE				; print one character
    2a23   c0 2a 14      	lbr	DAAction66Loop1_2
                         DAAction66Loop1_2Done
    2a26   f8 2e         	ldi	'.'
-   2a28   d4 ff 03      	call	f_type
+   2a28   d4 03 30      	call	O_TYPE
    2a2b   f8 20         	ldi	' '
-   2a2d   d4 ff 03      	call	f_type				; print ". "
+   2a2d   d4 03 30      	call	O_TYPE				; print ". "
    2a30   1c            	inc	RC
    2a31   1c            	inc	RC				; linelen += 2
                         DAAction66Loop1Tail
@@ -1973,11 +1992,11 @@
    2a3a   ca 2a 46      	LBNZ	DAAction66NotEmpty
    2a3d   f8 31 bf f8   	load	rf,Action6Msg
    2a41   64 af         
-   2a43   d4 ff 09      	call	f_msg				; print "Nothing!"
+   2a43   d4 03 33      	call	O_MSG				; print "Nothing!"
                         DAAction66NotEmpty
    2a46   f8 2c bf f8   	load	rf,NewlineMsg			; print "\r\n"
    2a4a   46 af         
-   2a4c   d4 ff 09      	call	f_msg
+   2a4c   d4 03 33      	call	O_MSG
    2a4f   c0 2a cc      	lbr	DAReturnFalse3
                         DACheck67
    2a52   ff 01         	smi	1
@@ -2020,7 +2039,7 @@
    2a9d   d4 2b 2e      	call	Do_SaveGame			; call SaveGame function
    2aa0   f8 31 bf f8   	load	rf,Action7Msg
    2aa4   6d af         
-   2aa6   d4 ff 09      	call	f_msg				; print "Game state has been saved in upper memory."
+   2aa6   d4 03 33      	call	O_MSG				; print "Game state has been saved in upper memory."
    2aa9   c0 2a cc      	lbr	DAReturnFalse3
                         DACheck72
    2aac   ff 01         	smi	1
@@ -2090,7 +2109,7 @@
    2aee   9e            	ghi	re
    2aef   fa fe         	ani	0feh
    2af1   be            	phi	re
-   2af2   d4 ff 06      	call	f_read
+   2af2   d4 03 36      	call	O_READKEY
    2af5   bf            	phi	rf
    2af6   9e            	ghi	re
    2af7   f9 01         	ori	001h
@@ -2109,20 +2128,20 @@
    2b09   c0 2a ee      	lbr	Do_YesNo
                         YN_No
    2b0c   9f            	ghi	RF
-   2b0d   d4 ff 03      	call	f_type
+   2b0d   d4 03 30      	call	O_TYPE
    2b10   f8 0d         	ldi	cr
-   2b12   d4 ff 03      	call	f_type
+   2b12   d4 03 30      	call	O_TYPE
    2b15   f8 0a         	ldi	lf
-   2b17   d4 ff 03      	call	f_type				; print 'n\r\n'
+   2b17   d4 03 30      	call	O_TYPE				; print 'n\r\n'
    2b1a   f8 00         	ldi	0
    2b1c   d5            	retn					; return 0
                         YN_Yes
    2b1d   9f            	ghi	RF
-   2b1e   d4 ff 03      	call	f_type
+   2b1e   d4 03 30      	call	O_TYPE
    2b21   f8 0d         	ldi	cr
-   2b23   d4 ff 03      	call	f_type
+   2b23   d4 03 30      	call	O_TYPE
    2b26   f8 0a         	ldi	lf
-   2b28   d4 ff 03      	call	f_type				; print 'y\r\n'
+   2b28   d4 03 30      	call	O_TYPE				; print 'y\r\n'
    2b2b   f8 01         	ldi	1
    2b2d   d5            	retn					; return 1
                         
@@ -2142,7 +2161,7 @@
    2b3c   a7            	plo	r7
    2b3d   d4 03 06      	call	O_OPEN			; attempt to open file
    2b40   cb 2b 69      	lbnf	SaveOpened		; DF=0, file was opened
-   2b43   d4 ff 66      	call	f_inmsg
+   2b43   d4 03 4b      	call	O_INMSG
    2b46   53 61 76 65   	db	'Save file could not be created.',cr,lf,0
    2b4a   20 66 69 6c   
    2b4e   65 20 63 6f   
@@ -2169,7 +2188,7 @@
    2b87   d4 03 12      	call	O_CLOSE			; close the image file
    2b8a   d5            	retn
                         WriteError:
-   2b8b   d4 ff 66      	call	f_inmsg
+   2b8b   d4 03 4b      	call	O_INMSG
    2b8e   47 61 6d 65   	db	'Game state could not be saved.',cr,lf,0
    2b92   20 73 74 61   
    2b96   74 65 20 63   
@@ -6927,153 +6946,156 @@
 316d  Action7Msg    000b  AR            3192  Array_C       3cc3  Array_DIR 
 63d7  Array_I2      732d  Array_IA      736a  Array_NV      3ae3  Array_NVS 
 3cf0  Array_RM      72dd  Array_TPS     0004  b_devBBSER    0002  b_devFLPY 
-0001  b_devIDE      0020  b_devNVR      0010  b_devRTC      0008  b_devUART 
-ff00  BIOS          0008  bs            2006  build         2f1c  CarryDrop1Msg
-2f2c  CarryDrop2Msg    2f57  CarryDrop3Msg    2f6c  CarryDrop4Msg    2f8c  CarryDrop5Msg
-2fa3  CarryDrop6Msg    2fc3  CarryDrop7Msg    2690  CDDropItem    25c6  CDHaveNoun
-25d7  CDLoop1       25df  CDLoop1Tail    260e  CDLoop2       2612  CDLoop2_1 
-261d  CDLoop2_2     263a  CDLoop2_2NoMatch1    2639  CDLoop2_2NoMatch2    2663  CDLoop2_FoundObject
-2640  CDLoop2Done    264d  CDLoop2Done2    265b  CDLoop2Done3    263b  CDLoop2Tail
-25f6  CDNotTake     269e  CDPrintAndReturn    2680  CDTakeItem    0095  CL        
-2764  CLCheck10Loop1    277f  CLCheck11Loop1    27a4  CLDebug1      204e  ClearScreen
-26b1  CLLoop1       26bd  CLLoop1_1     26c9  CLLoop1_1Done    27a9  CLLoop1Tail
-26da  CLLoopCheck1    2756  CLLoopCheck10    2772  CLLoopCheck11    278a  CLLoopCheck12
-2799  CLLoopCheck13    27a2  CLLoopCheck14    26e9  CLLoopCheck2    26f6  CLLoopCheck3
-2709  CLLoopCheck4    2716  CLLoopCheck5    2723  CLLoopCheck6    2731  CLLoopCheck7
-273e  CLLoopCheck8    274a  CLLoopCheck9    235d  CloseLoadFile    2b81  CloseSaveFile
-27b7  CLReturnFalse    27ae  CLReturnTrue    2bbf  ClsMsg        000d  cr        
-28ae  DAAction59    295a  DAAction65Loop    296d  DAAction65LoopTail    29d1  DAAction66Loop1
-29ea  DAAction66Loop1_1    29f7  DAAction66Loop1_1Done    2a14  DAAction66Loop1_2    2a26  DAAction66Loop1_2Done
-2a32  DAAction66Loop1Tail    2a46  DAAction66NotEmpty    2a0c  DAAction66SkipLinefeed    27ee  DACheck52 
-27fd  DACheck52Loop    2803  DACheck52Next    281a  DACheck52TakeItem    282b  DACheck53 
-2846  DACheck54     2858  DACheck55     2860  DACheck56     2871  DACheck57 
-2882  DACheck58     2899  DACheck58Loop    28a3  DACheck58LoopDone    28aa  DACheck59 
-28bf  DACheck60     28d7  DACheck60Loop    28e3  DACheck60LoopDone    28ea  DACheck61 
-2908  DACheck62     291f  DACheck63     293e  DACheck64     2945  DACheck65 
-29b8  DACheck66     2a52  DACheck67     2a63  DACheck68     2a75  DACheck69 
-2a8e  DACheck70     2a98  DACheck71     2aac  DACheck72     2aae  DADebug1  
-2acf  DADoLook      27cf  DAPrintMessage    2828  DAReturnFalse1    29b5  DAReturnFalse2
-2acc  DAReturnFalse3    736e  Darkflag      2002  date          007f  del       
-27c0  Do_Action     25b1  Do_CarryDrop    26a2  Do_CheckLogics    2182  Do_GetInput
-2310  Do_LoadGame    2367  Do_Look       2b2e  Do_SaveGame    2457  Do_Turn   
-2aee  Do_YesNo      f800  EBIOS         736d  Endflag       73d2  endrom    
-0005  errdirnotempty    0001  errexists     0003  errinvdir     0004  errisdir  
-0002  errnoffnd     0006  errnotexec    001b  esc           20a5  Exit      
-f830  f_astodt      f833  f_astotm      ff5d  f_atoi        ff00  f_boot    
-ff42  f_bootide     f800  f_bread       ff6c  f_brktest     f806  f_btest   
-f803  f_btype       ff33  f_div16       ff2a  f_drive       f827  f_dttoas  
-ff6f  f_findtkn     ff57  f_freemem     ff81  f_getdev      f815  f_gettod  
-ff45  f_hexin       ff48  f_hexout2     ff4b  f_hexout4     f824  f_ideid   
-ff3c  f_ideread     ff36  f_idereset    f821  f_idesize     ff39  f_idewrite
-ff7b  f_idnum       ff3f  f_initcall    ff66  f_inmsg       ff0f  f_input   
-ff69  f_inputl      ff63  f_intout      ff78  f_isalnum     ff72  f_isalpha 
-ff75  f_ishex       ff5a  f_isnum       ff7e  f_isterm      ff15  f_ltrim   
-ff1b  f_memcpy      ff54  f_minimon     ff51  f_mover       ff09  f_msg     
-ff30  f_mul16       f836  f_nvrcchk     f81b  f_rdnvr       ff21  f_rdsec   
-ff06  f_read        f82d  f_rtctest     ff27  f_seek        ff24  f_seek0   
-ff2d  f_setbd       f818  f_settod      ff12  f_strcmp      ff18  f_strcpy  
-f82a  f_tmtoas      ff4e  f_tty         ff03  f_type        ff0c  f_typex   
-ff60  f_uintout     f80c  f_uread       f812  f_usetbd      f80f  f_utest   
-f809  f_utype       fff9  f_version     f81e  f_wrnvr       ff1e  f_wrtsec  
-2077  GameReset     20b0  GameStart     217f  GAV_FoundVar    2178  GAV_Loop1 
-2058  GenRandom     21aa  GIBackspace    21f3  GICharOk      21cb  GIEnter   
-21ff  GIgetsDone    21f0  GIJumpLoop1    2194  GILoop1       21c0  GILoop1N1 
-21d7  GILoop1N2     230d  GIParseAllGood    220c  GIParseLoop1    2213  GIParseLoop1Done
-2218  GIParseLoop2    2229  GIParseLoop2Done    222d  GIParseLoop3    2234  GIParseLoop3Done
-223d  GIParseLoop4    225b  GIParseLoop5    2264  GIParseLoop5_1    228d  GIParseLoop5_1_1
-2287  GIParseLoop5_1Match    226e  GIParseLoop5_1Next1    22aa  GIParseLoop5_1Next2    22ae  GIParseLoop5_1Next3
-229c  GIParseLoop5_1NoMatch    2284  GIParseLoop5_1WordEnd    22b4  GIParseLoop5Tail    22e9  GIParseVerbOk
-2086  GRLoop1       03f6  I_SERVE       5c94  IAS00_Msg     5c96  IAS01_Msg 
-5ca0  IAS02_Msg     5cc0  IAS03_Msg     5cdf  IAS04_Msg     5d12  IAS05_Msg 
-5d1f  IAS06_Msg     5d25  IAS07_Msg     5d3c  IAS08_Msg     5d5a  IAS09_Msg 
-5d79  IAS10_Msg     5d97  IAS11_Msg     5ddb  IAS12_Msg     5dfb  IAS13_Msg 
-5e0d  IAS14_Msg     5e28  IAS15_Msg     5e58  IAS16_Msg     5e66  IAS17_Msg 
-5e91  IAS18_Msg     5e9b  IAS19_Msg     5eb8  IAS20_Msg     5ed1  IAS21_Msg 
-5ef3  IAS22_Msg     5f10  IAS23_Msg     5f2e  IAS24_Msg     5f41  IAS25_Msg 
-5f51  IAS26_Msg     5f8e  IAS28_Msg     5fa3  IAS29_Msg     5fc7  IAS30_Msg 
-6016  IAS31_Msg     603c  IAS32_Msg     604e  IAS33_Msg     607c  IAS34_Msg 
-6094  IAS35_Msg     60f1  IAS36_Msg     6103  IAS37_Msg     6120  IAS38_Msg 
-613c  IAS39_Msg     6155  IAS40_Msg     616d  IAS41_Msg     6184  IAS42_Msg 
-619d  IAS43_Msg     61b4  IAS44_Msg     61db  IAS45_Msg     622a  IAS46_Msg 
-624a  IAS47_Msg     6275  IAS48_Msg     6291  IAS49_Msg     62b1  IAS50_Msg 
-62f5  IAS51_Msg     6323  IAS52_Msg     634d  IAS53_Msg     6367  IAS54_Msg 
-637d  IAS55_Msg     6393  IAS56_Msg     63ba  IAS57_Msg     63cd  IAS58_Msg 
-63d3  IAS59_Msg     63d5  IAS60_Msg     5f78  IASesc_Msg    003d  IL        
-2d43  InputError1Msg    2d5c  InputError2Msg    2d64  InputError3Msg    2d7d  InputError4Msg
-2d23  InputPromptMsg    0406  K_BDAY        0405  K_BMONTH      0403  K_BUILD   
-0407  K_BYEAR       0470  K_CLKFREQ     0476  K_DAY         044d  K_HEAP    
-0442  K_HIMEM       0478  K_HOUR        0479  K_MINUTE      0475  K_MONTH   
-047b  K_SECDEN      047d  K_SECNUM      047a  K_SECOND      0400  K_VER     
-0477  K_YEAR        2cc5  LampEmptyMsg    2cee  LampLow1Msg    2d15  LampLow2Msg
-212f  LampNotEmpty    7370  LampOil       000a  lf            2320  LGNext1   
-007d  LI            23b7  LKLoop1       23e9  LKLoop1_1     23f6  LKLoop1_1Tail
-23cc  LKLoop1Next1    2400  LKLoop1Tail    2418  LKLoop2       242c  LKLoop2Next1
-2440  LKLoop2Tail    2389  LKNotDark     23a6  LKPrintRoom1    0003  LN        
-2335  LoadFailed    2c6f  LoadFailedMsg    736c  Loadflag      2342  LoadOpened
-2c49  LoadQestion    73ba  localStack    2d88  Look1Msg      2db2  Look2Msg  
-2dbc  Look3Msg      2de0  Look4Msg      20f1  MainGetInput    20d9  MainLoad  
-2164  MainLoopTail    2158  MainNoLamp    004f  MAXLINE       0050  ML        
-423f  MSS00_Msg     4241  MSS01_Msg     4254  MSS02_Msg     42c9  MSS03_Msg 
-4305  MSS04_Msg     4391  MSS05_Msg     4408  MSS06_Msg     445a  MSS07_Msg 
-44c4  MSS08_Msg     4538  MSS09_Msg     4566  MSS10_Msg     45a8  MSS11_Msg 
-45f6  MSS12_Msg     4624  MSS13_Msg     465c  MSS14_Msg     46ba  MSS15_Msg 
-471b  MSS16_Msg     474c  MSS17_Msg     47ae  MSS18_Msg     4880  MSS19_Msg 
-48bf  MSS20_Msg     4912  MSS21_Msg     4982  MSS22_Msg     49ee  MSS23_Msg 
-4a33  MSS24_Msg     4a5b  MSS25_Msg     4a96  MSS26_Msg     4af9  MSS27_Msg 
-4b47  MSS28_Msg     4bd4  MSS29_Msg     4c20  MSS30_Msg     4c79  MSS31_Msg 
-4cf8  MSS32_Msg     4d4c  MSS33_Msg     4ddf  MSS34_Msg     4e04  MSS35_Msg 
-4e66  MSS36_Msg     4efc  MSS37_Msg     4f21  MSS38_Msg     4f59  MSS39_Msg 
-4fbd  MSS40_Msg     4fff  MSS41_Msg     509b  MSS42_Msg     5102  MSS43_Msg 
-516a  MSS44_Msg     5203  MSS45_Msg     525c  MSS46_Msg     52aa  MSS47_Msg 
-52d1  MSS48_Msg     532b  MSS49_Msg     5380  MSS50_Msg     53ea  MSS51_Msg 
-5409  MSS52_Msg     5451  MSS53_Msg     5468  MSS54_Msg     54a1  MSS55_Msg 
-54ed  MSS56_Msg     553d  MSS57_Msg     5572  MSS58_Msg     5597  MSS59_Msg 
-55c8  MSS60_Msg     5606  MSS61_Msg     5625  MSS62_Msg     565b  MSS63_Msg 
-567f  MSS64_Msg     56b8  MSS65_Msg     56fa  MSS66_Msg     570d  MSS67_Msg 
-5768  MSS68_Msg     57cf  MSS69_Msg     5833  MSS70_Msg     58bb  MSS71_Msg 
-58dc  MSS72_Msg     5964  MSS73_Msg     59d7  MSS74_Msg     5a1b  MSS75_Msg 
-5a7a  MSS76_Msg     5ab4  MSS77_Msg     5b22  MSS78_Msg     5b7a  MSS79_Msg 
-5c03  MSS80_Msg     0005  MX            2c46  NewlineMsg    003c  NL        
-036c  O_ALLOC       0004  O_APPND       035a  O_BOOT        0366  O_BRKTEST 
-0324  O_CHDIR       0300  O_CLDBOOT     0312  O_CLOSE       0001  O_CREAT   
-0475  O_DATTIM      036f  O_DEALLOC     0318  O_DELETE      0369  O_DEVCTRL 
+0001  b_devIDE      0001  b_devNBREAD    0020  b_devNVR      0010  b_devRTC  
+0008  b_devUART     ff00  BIOS          0008  bs            2006  build     
+2f1c  CarryDrop1Msg    2f2c  CarryDrop2Msg    2f57  CarryDrop3Msg    2f6c  CarryDrop4Msg
+2f8c  CarryDrop5Msg    2fa3  CarryDrop6Msg    2fc3  CarryDrop7Msg    2690  CDDropItem
+25c6  CDHaveNoun    25d7  CDLoop1       25df  CDLoop1Tail    260e  CDLoop2   
+2612  CDLoop2_1     261d  CDLoop2_2     263a  CDLoop2_2NoMatch1    2639  CDLoop2_2NoMatch2
+2663  CDLoop2_FoundObject    2640  CDLoop2Done    264d  CDLoop2Done2    265b  CDLoop2Done3
+263b  CDLoop2Tail    25f6  CDNotTake     269e  CDPrintAndReturn    2680  CDTakeItem
+0095  CL            2764  CLCheck10Loop1    277f  CLCheck11Loop1    27a4  CLDebug1  
+204e  ClearScreen    26b1  CLLoop1       26bd  CLLoop1_1     26c9  CLLoop1_1Done
+27a9  CLLoop1Tail    26da  CLLoopCheck1    2756  CLLoopCheck10    2772  CLLoopCheck11
+278a  CLLoopCheck12    2799  CLLoopCheck13    27a2  CLLoopCheck14    26e9  CLLoopCheck2
+26f6  CLLoopCheck3    2709  CLLoopCheck4    2716  CLLoopCheck5    2723  CLLoopCheck6
+2731  CLLoopCheck7    273e  CLLoopCheck8    274a  CLLoopCheck9    235d  CloseLoadFile
+2b81  CloseSaveFile    27b7  CLReturnFalse    27ae  CLReturnTrue    2bbf  ClsMsg    
+000d  cr            0447  D_IDEREAD     0444  D_IDERESET    044a  D_IDEWRITE
+0450  D_PROGEND     044d  D_REAPHEAP    28ae  DAAction59    295a  DAAction65Loop
+296d  DAAction65LoopTail    29d1  DAAction66Loop1    29ea  DAAction66Loop1_1    29f7  DAAction66Loop1_1Done
+2a14  DAAction66Loop1_2    2a26  DAAction66Loop1_2Done    2a32  DAAction66Loop1Tail    2a46  DAAction66NotEmpty
+2a0c  DAAction66SkipLinefeed    27ee  DACheck52     27fd  DACheck52Loop    2803  DACheck52Next
+281a  DACheck52TakeItem    282b  DACheck53     2846  DACheck54     2858  DACheck55 
+2860  DACheck56     2871  DACheck57     2882  DACheck58     2899  DACheck58Loop
+28a3  DACheck58LoopDone    28aa  DACheck59     28bf  DACheck60     28d7  DACheck60Loop
+28e3  DACheck60LoopDone    28ea  DACheck61     2908  DACheck62     291f  DACheck63 
+293e  DACheck64     2945  DACheck65     29b8  DACheck66     2a52  DACheck67 
+2a63  DACheck68     2a75  DACheck69     2a8e  DACheck70     2a98  DACheck71 
+2aac  DACheck72     2aae  DADebug1      2acf  DADoLook      27cf  DAPrintMessage
+2828  DAReturnFalse1    29b5  DAReturnFalse2    2acc  DAReturnFalse3    736e  Darkflag  
+007f  del           27c0  Do_Action     25b1  Do_CarryDrop    26a2  Do_CheckLogics
+2182  Do_GetInput    2310  Do_LoadGame    2367  Do_Look       2b2e  Do_SaveGame
+2457  Do_Turn       2aee  Do_YesNo      f800  EBIOS         736d  Endflag   
+73d2  endrom        0005  errdirnotempty    0001  errexists     0003  errinvdir 
+0004  errisdir      0002  errnoffnd     0006  errnotexec    001b  esc       
+20a5  Exit          f830  f_astodt      f833  f_astotm      ff5d  f_atoi    
+ff00  f_boot        ff42  f_bootide     f800  f_bread       ff6c  f_brktest 
+f806  f_btest       f803  f_btype       ff33  f_div16       ff2a  f_drive   
+f827  f_dttoas      ff6f  f_findtkn     ff57  f_freemem     ff81  f_getdev  
+f815  f_gettod      ff45  f_hexin       ff48  f_hexout2     ff4b  f_hexout4 
+f824  f_ideid       ff3c  f_ideread     ff36  f_idereset    f821  f_idesize 
+ff39  f_idewrite    ff7b  f_idnum       ff3f  f_initcall    ff66  f_inmsg   
+ff0f  f_input       ff69  f_inputl      ff63  f_intout      ff78  f_isalnum 
+ff72  f_isalpha     ff75  f_ishex       ff5a  f_isnum       ff7e  f_isterm  
+ff15  f_ltrim       ff1b  f_memcpy      ff54  f_minimon     ff51  f_mover   
+ff09  f_msg         ff30  f_mul16       ff54  f_nbread      f836  f_nvrcchk 
+f81b  f_rdnvr       ff21  f_rdsec       ff06  f_read        f82d  f_rtctest 
+ff27  f_seek        ff24  f_seek0       ff2d  f_setbd       f818  f_settod  
+ff12  f_strcmp      ff18  f_strcpy      f82a  f_tmtoas      ff4e  f_tty     
+ff03  f_type        ff0c  f_typex       ff60  f_uintout     f80c  f_uread   
+f812  f_usetbd      f80f  f_utest       f809  f_utype       fff9  f_version 
+f81e  f_wrnvr       ff1e  f_wrtsec      0010  ff_archive    0001  ff_dir    
+0002  ff_exec       0008  ff_hide       0004  ff_write      2077  GameReset 
+20b0  GameStart     217f  GAV_FoundVar    2178  GAV_Loop1     2058  GenRandom 
+21aa  GIBackspace    21f3  GICharOk      21cb  GIEnter       21ff  GIgetsDone
+21f0  GIJumpLoop1    2194  GILoop1       21c0  GILoop1N1     21d7  GILoop1N2 
+230d  GIParseAllGood    220c  GIParseLoop1    2213  GIParseLoop1Done    2218  GIParseLoop2
+2229  GIParseLoop2Done    222d  GIParseLoop3    2234  GIParseLoop3Done    223d  GIParseLoop4
+225b  GIParseLoop5    2264  GIParseLoop5_1    228d  GIParseLoop5_1_1    2287  GIParseLoop5_1Match
+226e  GIParseLoop5_1Next1    22aa  GIParseLoop5_1Next2    22ae  GIParseLoop5_1Next3    229c  GIParseLoop5_1NoMatch
+2284  GIParseLoop5_1WordEnd    22b4  GIParseLoop5Tail    22e9  GIParseVerbOk    2086  GRLoop1   
+03f6  I_SERVE       5c94  IAS00_Msg     5c96  IAS01_Msg     5ca0  IAS02_Msg 
+5cc0  IAS03_Msg     5cdf  IAS04_Msg     5d12  IAS05_Msg     5d1f  IAS06_Msg 
+5d25  IAS07_Msg     5d3c  IAS08_Msg     5d5a  IAS09_Msg     5d79  IAS10_Msg 
+5d97  IAS11_Msg     5ddb  IAS12_Msg     5dfb  IAS13_Msg     5e0d  IAS14_Msg 
+5e28  IAS15_Msg     5e58  IAS16_Msg     5e66  IAS17_Msg     5e91  IAS18_Msg 
+5e9b  IAS19_Msg     5eb8  IAS20_Msg     5ed1  IAS21_Msg     5ef3  IAS22_Msg 
+5f10  IAS23_Msg     5f2e  IAS24_Msg     5f41  IAS25_Msg     5f51  IAS26_Msg 
+5f8e  IAS28_Msg     5fa3  IAS29_Msg     5fc7  IAS30_Msg     6016  IAS31_Msg 
+603c  IAS32_Msg     604e  IAS33_Msg     607c  IAS34_Msg     6094  IAS35_Msg 
+60f1  IAS36_Msg     6103  IAS37_Msg     6120  IAS38_Msg     613c  IAS39_Msg 
+6155  IAS40_Msg     616d  IAS41_Msg     6184  IAS42_Msg     619d  IAS43_Msg 
+61b4  IAS44_Msg     61db  IAS45_Msg     622a  IAS46_Msg     624a  IAS47_Msg 
+6275  IAS48_Msg     6291  IAS49_Msg     62b1  IAS50_Msg     62f5  IAS51_Msg 
+6323  IAS52_Msg     634d  IAS53_Msg     6367  IAS54_Msg     637d  IAS55_Msg 
+6393  IAS56_Msg     63ba  IAS57_Msg     63cd  IAS58_Msg     63d3  IAS59_Msg 
+63d5  IAS60_Msg     5f78  IASesc_Msg    003d  IL            2d43  InputError1Msg
+2d5c  InputError2Msg    2d64  InputError3Msg    2d7d  InputError4Msg    2d23  InputPromptMsg
+0406  K_BDAY        0405  K_BMONTH      0403  K_BUILD       0407  K_BYEAR   
+0470  K_CLKFREQ     0476  K_DAY         0468  K_HEAP        0442  K_HIMEM   
+0478  K_HOUR        0465  K_LOWMEM      0479  K_MINUTE      0475  K_MONTH   
+0467  K_RETVAL      047b  K_SECDEN      047d  K_SECNUM      047a  K_SECOND  
+0400  K_VER         0477  K_YEAR        2cc5  LampEmptyMsg    2cee  LampLow1Msg
+2d15  LampLow2Msg    212f  LampNotEmpty    7370  LampOil       000a  lf        
+2320  LGNext1       007d  LI            23b7  LKLoop1       23e9  LKLoop1_1 
+23f6  LKLoop1_1Tail    23cc  LKLoop1Next1    2400  LKLoop1Tail    2418  LKLoop2   
+242c  LKLoop2Next1    2440  LKLoop2Tail    2389  LKNotDark     23a6  LKPrintRoom1
+0003  LN            2335  LoadFailed    2c6f  LoadFailedMsg    736c  Loadflag  
+2342  LoadOpened    2c49  LoadQestion    73ba  localStack    2d88  Look1Msg  
+2db2  Look2Msg      2dbc  Look3Msg      2de0  Look4Msg      20f1  MainGetInput
+20d9  MainLoad      2164  MainLoopTail    2158  MainNoLamp    004f  MAXLINE   
+0050  ML            423f  MSS00_Msg     4241  MSS01_Msg     4254  MSS02_Msg 
+42c9  MSS03_Msg     4305  MSS04_Msg     4391  MSS05_Msg     4408  MSS06_Msg 
+445a  MSS07_Msg     44c4  MSS08_Msg     4538  MSS09_Msg     4566  MSS10_Msg 
+45a8  MSS11_Msg     45f6  MSS12_Msg     4624  MSS13_Msg     465c  MSS14_Msg 
+46ba  MSS15_Msg     471b  MSS16_Msg     474c  MSS17_Msg     47ae  MSS18_Msg 
+4880  MSS19_Msg     48bf  MSS20_Msg     4912  MSS21_Msg     4982  MSS22_Msg 
+49ee  MSS23_Msg     4a33  MSS24_Msg     4a5b  MSS25_Msg     4a96  MSS26_Msg 
+4af9  MSS27_Msg     4b47  MSS28_Msg     4bd4  MSS29_Msg     4c20  MSS30_Msg 
+4c79  MSS31_Msg     4cf8  MSS32_Msg     4d4c  MSS33_Msg     4ddf  MSS34_Msg 
+4e04  MSS35_Msg     4e66  MSS36_Msg     4efc  MSS37_Msg     4f21  MSS38_Msg 
+4f59  MSS39_Msg     4fbd  MSS40_Msg     4fff  MSS41_Msg     509b  MSS42_Msg 
+5102  MSS43_Msg     516a  MSS44_Msg     5203  MSS45_Msg     525c  MSS46_Msg 
+52aa  MSS47_Msg     52d1  MSS48_Msg     532b  MSS49_Msg     5380  MSS50_Msg 
+53ea  MSS51_Msg     5409  MSS52_Msg     5451  MSS53_Msg     5468  MSS54_Msg 
+54a1  MSS55_Msg     54ed  MSS56_Msg     553d  MSS57_Msg     5572  MSS58_Msg 
+5597  MSS59_Msg     55c8  MSS60_Msg     5606  MSS61_Msg     5625  MSS62_Msg 
+565b  MSS63_Msg     567f  MSS64_Msg     56b8  MSS65_Msg     56fa  MSS66_Msg 
+570d  MSS67_Msg     5768  MSS68_Msg     57cf  MSS69_Msg     5833  MSS70_Msg 
+58bb  MSS71_Msg     58dc  MSS72_Msg     5964  MSS73_Msg     59d7  MSS74_Msg 
+5a1b  MSS75_Msg     5a7a  MSS76_Msg     5ab4  MSS77_Msg     5b22  MSS78_Msg 
+5b7a  MSS79_Msg     5c03  MSS80_Msg     0005  MX            2c46  NewlineMsg
+003c  NL            036c  O_ALLOC       0004  O_APPND       035a  O_BOOT    
+0366  O_BRKTEST     0324  O_CHDIR       0300  O_CLDBOOT     0312  O_CLOSE   
+0001  O_CREAT       036f  O_DEALLOC     0318  O_DELETE      0369  O_DEVCTRL 
 031e  O_EXEC        0342  O_EXECBIN     034e  O_GETDEV      0351  O_GETTOD  
 0363  O_INITCALL    034b  O_INMSG       0339  O_INPUT       0357  O_INPUTL  
-0348  O_KINIT       0321  O_MKDIR       0333  O_MSG         0306  O_OPEN    
-0315  O_OPENDIR     033f  O_PRINT       033c  O_PRTSTAT     032a  O_RDLUMP  
-0309  O_READ        0336  O_READKEY     031b  O_RENAME      0327  O_RMDIR   
-030f  O_SEEK        0360  O_SETBD       0345  O_SETDEF      0354  O_SETTOD  
-0002  O_TRUNC       035d  O_TTY         0330  O_TYPE        030c  O_WRITE   
-032d  O_WRLUMP      0303  O_WRMBOOT     2043  P2D_Ones      204a  P2D_OnesDone
-202d  P2D_Tens      2034  P2D_TensDone    2028  Print2Digit    7377  PrintNumber
-0000  r0            0001  r1            000a  r10           000b  r11       
-000c  r12           000d  r13           000e  r14           000f  r15       
-0002  r2            0003  r3            0004  r4            0005  r5        
-0006  r6            0007  r7            0008  r8            0009  r9        
-000a  ra            7374  Rand_VarA     7375  Rand_VarB     7376  Rand_VarC 
-7373  Rand_VarX     000b  rb            000c  rc            000d  rd        
-000e  re            000f  rf            0022  RL            736f  Room      
-3e00  RSS00_Msg     3e02  RSS01_Msg     3e10  RSS02_Msg     3e38  RSS03_Msg 
-3e5e  RSS04_Msg     3e7c  RSS05_Msg     3ea0  RSS06_Msg     3eb8  RSS07_Msg 
-3ec6  RSS08_Msg     3eda  RSS09_Msg     3eea  RSS10_Msg     3f07  RSS11_Msg 
-3f0f  RSS12_Msg     3f1d  RSS13_Msg     3f2b  RSS14_Msg     3f39  RSS15_Msg 
-3f47  RSS16_Msg     3f55  RSS17_Msg     3f63  RSS18_Msg     3fb2  RSS19_Msg 
-4002  RSS20_Msg     4011  RSS21_Msg     4060  RSS22_Msg     406d  RSS23_Msg 
-407b  RSS24_Msg     40c1  RSS25_Msg     40cf  RSS26_Msg     40df  RSS27_Msg 
-410e  RSS28_Msg     415f  RSS29_Msg     4161  RSS30_Msg     4163  RSS31_Msg 
-4165  RSS32_Msg     4167  RSS33_Msg     73d2  SaveDTA       73bd  SaveFiledes
-0046  SaveLength    2b69  SaveOpened    72cc  SavePath      73bb  saveStack 
-732d  SaveStart     0004  scall         2bb1  ScoreTable    6414  splash    
-0005  sret          2bce  StartingMsg    7371  StateFlags    2176  Sub_GetActionVariable
-5c1a  Table_IAS     419d  Table_MSS     3dbc  Table_RSS     0003  TR        
-000d  TT            24d0  TUBlockedAndDark    258c  TUCarryDrop    25a4  TUCommandWasFound
-25b0  TUDone        24e3  TUExitNotBlocked    248b  TUHaveDirection    2473  TUHaveNoun
-255b  TULoo1_1Tail    24f7  TULoop1       2547  TULoop1_1     2563  TULoop1_1Done
-254f  TULoop1_1SkipAction    252d  TULoop1CheckCommand    257c  TULoop1Done    251c  TULoop1GetChances
-2506  TULoop1Next1    256e  TULoop1Tail    2576  TULoop1Tail2    24ec  TUNoDirection
-247c  TUNoGo        2596  TUNotCarryDrop    24ae  TUNotDark     25ad  TUPrintAndReturn
-2e01  Turn1Msg      2e41  Turn2Msg      2e7b  Turn3Msg      2ea4  Turn4Msg  
-2ed0  Turn5Msg      2efc  Turn6Msg      2592  TURunCarryDrop    24e6  TUSetRoom 
-036a  V_DVEC        03fd  V_IVEC        2b8b  WriteError    2b0c  YN_No     
-2b1d  YN_Yes        
+0348  O_KINIT       0375  O_MEMCTRL     0321  O_MKDIR       0333  O_MSG     
+0306  O_OPEN        0315  O_OPENDIR     033f  O_PRINT       033c  O_PRTSTAT 
+032a  O_RDLUMP      0309  O_READ        0336  O_READKEY     031b  O_RENAME  
+0327  O_RMDIR       030f  O_SEEK        0360  O_SETBD       0345  O_SETDEF  
+0354  O_SETTOD      0372  O_TERMCTRL    0002  O_TRUNC       035d  O_TTY     
+0330  O_TYPE        030c  O_WRITE       032d  O_WRLUMP      0303  O_WRMBOOT 
+2043  P2D_Ones      204a  P2D_OnesDone    202d  P2D_Tens      2034  P2D_TensDone
+2028  Print2Digit    7377  PrintNumber    0000  r0            0001  r1        
+000a  r10           000b  r11           000c  r12           000d  r13       
+000e  r14           000f  r15           0002  r2            0003  r3        
+0004  r4            0005  r5            0006  r6            0007  r7        
+0008  r8            0009  r9            000a  ra            7374  Rand_VarA 
+7375  Rand_VarB     7376  Rand_VarC     7373  Rand_VarX     000b  rb        
+000c  rc            000d  rd            000e  re            000f  rf        
+0022  RL            736f  Room          3e00  RSS00_Msg     3e02  RSS01_Msg 
+3e10  RSS02_Msg     3e38  RSS03_Msg     3e5e  RSS04_Msg     3e7c  RSS05_Msg 
+3ea0  RSS06_Msg     3eb8  RSS07_Msg     3ec6  RSS08_Msg     3eda  RSS09_Msg 
+3eea  RSS10_Msg     3f07  RSS11_Msg     3f0f  RSS12_Msg     3f1d  RSS13_Msg 
+3f2b  RSS14_Msg     3f39  RSS15_Msg     3f47  RSS16_Msg     3f55  RSS17_Msg 
+3f63  RSS18_Msg     3fb2  RSS19_Msg     4002  RSS20_Msg     4011  RSS21_Msg 
+4060  RSS22_Msg     406d  RSS23_Msg     407b  RSS24_Msg     40c1  RSS25_Msg 
+40cf  RSS26_Msg     40df  RSS27_Msg     410e  RSS28_Msg     415f  RSS29_Msg 
+4161  RSS30_Msg     4163  RSS31_Msg     4165  RSS32_Msg     4167  RSS33_Msg 
+73d2  SaveDTA       73bd  SaveFiledes    0046  SaveLength    2b69  SaveOpened
+72cc  SavePath      73bb  saveStack     732d  SaveStart     0004  scall     
+2bb1  ScoreTable    6414  splash        0005  sret          2bce  StartingMsg
+7371  StateFlags    2176  Sub_GetActionVariable    5c1a  Table_IAS     419d  Table_MSS 
+3dbc  Table_RSS     0003  TR            000d  TT            24d0  TUBlockedAndDark
+258c  TUCarryDrop    25a4  TUCommandWasFound    25b0  TUDone        24e3  TUExitNotBlocked
+248b  TUHaveDirection    2473  TUHaveNoun    255b  TULoo1_1Tail    24f7  TULoop1   
+2547  TULoop1_1     2563  TULoop1_1Done    254f  TULoop1_1SkipAction    252d  TULoop1CheckCommand
+257c  TULoop1Done    251c  TULoop1GetChances    2506  TULoop1Next1    256e  TULoop1Tail
+2576  TULoop1Tail2    24ec  TUNoDirection    247c  TUNoGo        2596  TUNotCarryDrop
+24ae  TUNotDark     25ad  TUPrintAndReturn    2e01  Turn1Msg      2e41  Turn2Msg  
+2e7b  Turn3Msg      2ea4  Turn4Msg      2ed0  Turn5Msg      2efc  Turn6Msg  
+2592  TURunCarryDrop    24e6  TUSetRoom     036a  V_DVEC        03fd  V_IVEC    
+2b8b  WriteError    2b0c  YN_No         2b1d  YN_Yes        
 
